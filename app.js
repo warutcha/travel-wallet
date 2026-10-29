@@ -732,24 +732,39 @@
     db.remind.on = true; save(); render(); enablePush();
   }
   function pushProblem(msg) { S.pushMsg = msg; S.pushBusy = false; render(); return false; }
+  function swReady(ms) {
+    return Promise.race([
+      navigator.serviceWorker.register('sw.js').then(function () { return navigator.serviceWorker.ready; }),
+      new Promise(function (_, rej) { setTimeout(function () { rej(new Error('sw-timeout')); }, ms || 10000); })
+    ]);
+  }
   function enablePush() {
     if (!WORKER) return pushProblem('The Check button works, but notifications are not connected yet. Finish step 4 of the setup guide.');
     if (isIOS() && !standalone()) return pushProblem('Open Travel Wallet from its Home Screen icon to turn on notifications.');
-    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return pushProblem('This browser cannot receive notifications.');
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return pushProblem('This browser cannot receive notifications. On iPhone you need iOS 16.4 or later.');
     S.pushMsg = 'Asking for permission…'; render();
+    var step = 'permission';
     return Notification.requestPermission().then(function (perm) {
       if (perm !== 'granted') return pushProblem('Notifications are blocked. Allow them in iPhone Settings › Notifications › Wallet.');
-      return navigator.serviceWorker.ready.then(function (reg) {
-        return fetch(WORKER + '/api/vapid').then(function (r) { if (!r.ok) throw new Error('vapid ' + r.status); return r.json(); }).then(function (j) {
+      step = 'helper'; S.pushMsg = 'Permission granted. Starting the app helper…'; render();
+      return swReady(10000).then(function (reg) {
+        step = 'keys'; S.pushMsg = 'Getting the notification key from your Worker…'; render();
+        return fetch(WORKER + '/api/vapid').then(function (r) { if (!r.ok) throw new Error('Worker answered ' + r.status); return r.json(); }).then(function (j) {
+          step = 'subscribe'; S.pushMsg = 'Signing this phone up…'; render();
           return reg.pushManager.getSubscription().then(function (sub) {
             if (sub && sub.options && sub.options.applicationServerKey && bytesToB64u(sub.options.applicationServerKey) !== j.publicKey) return sub.unsubscribe().then(function () { return null; });
             return sub;
           }).then(function (sub) { return sub || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(j.publicKey) }); });
-        }).then(function () { db.pushOn = true; persist(); return syncPush(); }).then(function (ok) {
-          S.pushMsg = ok ? 'Notifications are on for this phone.' : S.pushMsg; render(); return ok;
+        }).then(function () { step = 'save'; S.pushMsg = 'Saving your reminder time…'; render(); db.pushOn = true; persist(); return syncPush(); }).then(function (ok) {
+          S.pushMsg = ok ? 'Notifications are on for this phone.' : (S.pushMsg || 'Couldn\'t save the reminder on the Worker.'); render(); return ok;
         });
       });
-    }).catch(function (e) { return pushProblem("Couldn't reach the notification service. Check WORKER_URL in config.js and the Worker settings. (" + (e && e.message || e) + ')'); });
+    }).catch(function (e) {
+      var m = String(e && e.message || e);
+      if (step === 'helper' || m === 'sw-timeout') return pushProblem('The app helper didn\'t start. Check that sw.js and the icons folder are in your GitHub repo, then close the app fully and open it again.');
+      if (step === 'keys') return pushProblem("Couldn't reach your Worker. Check WORKER_URL in config.js. (" + m + ')');
+      return pushProblem('Something went wrong at the "' + step + '" step: ' + m);
+    });
   }
   function pushState() {
     var T = activeTrip();
@@ -757,7 +772,7 @@
   }
   function syncPush() {
     if (!WORKER || !db.pushOn || !('serviceWorker' in navigator)) return Promise.resolve(false);
-    return navigator.serviceWorker.ready.then(function (reg) { return reg.pushManager.getSubscription(); }).then(function (sub) {
+    return swReady(8000).then(function (reg) { return reg.pushManager.getSubscription(); }).then(function (sub) {
       if (!sub) { db.pushOn = false; persist(); return false; }
       var body = Object.assign(pushState(), { subscription: sub.toJSON() });
       return fetch(WORKER + '/api/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {

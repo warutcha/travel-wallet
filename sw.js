@@ -1,9 +1,10 @@
 // Travel Wallet service worker: works offline and shows the nightly notification.
-const CACHE = 'tw-app-v1';
+const CACHE = 'tw-app-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // Cache each file on its own, so one missing file can't stop the app from installing.
+  e.waitUntil(caches.open(CACHE).then((c) => Promise.all(SHELL.map((f) => c.add(f).catch(() => null)))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
