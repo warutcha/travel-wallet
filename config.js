@@ -3,5 +3,5 @@
 // for example: 'https://travel-wallet-push.yourname.workers.dev'
 // Leave it empty and the app still works, just without notifications.
 window.TW_CONFIG = {
-  WORKER_URL: ''
+  WORKER_URL: 'https://travel-wallet-push.warut-cha97.workers.dev'
 };
