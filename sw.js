@@ -1,6 +1,6 @@
 // Travel Wallet service worker: works offline and shows the nightly notification.
-const CACHE = 'tw-app-v2';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+const CACHE = 'tw-app-v3';
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   // Cache each file on its own, so one missing file can't stop the app from installing.
@@ -35,8 +35,8 @@ self.addEventListener('push', (e) => {
   const show = (body) => self.registration.showNotification(title, {
     body: body || data.body || 'Tap to confirm the cash left in your wallet.',
     tag: data.tag || 'tw-nightly',
-    icon: 'icons/icon-192.png',
-    badge: 'icons/icon-192.png',
+    icon: 'icon-192.png',
+    badge: 'icon-192.png',
     data: { url: data.url || './?check=1' }
   });
   e.waitUntil(
