@@ -146,6 +146,12 @@
   root.addEventListener('change', function (e) { var el = e.target.closest('[data-file]'); if (el && el.files && el.files[0]) restoreBackup(el.files[0]); });
 
   // ===================== icons & small parts =====================
+  var APP_VERSION = '1.1.0', APP_UPDATED = '29 Oct 2026';
+  function LOGO(size) {
+    return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 96 96" role="img" aria-label="Travel Wallet logo"><rect width="96" height="96" rx="22" fill="#1F6B52"/>' +
+      '<circle cx="48" cy="48" r="28" fill="#E6CB76" stroke="#B8963A" stroke-width="4"/><circle cx="48" cy="48" r="21" fill="none" stroke="#B8963A" stroke-width="1.6" stroke-dasharray="2 3"/>' +
+      '<path d="M34 50 L62 38 L54 62 L48 52 Z" fill="#FFFDF9" stroke="#3F322B" stroke-width="2.4" stroke-linejoin="round"/><path d="M48 52 L62 38" stroke="#3F322B" stroke-width="2.4" stroke-linecap="round"/></svg>';
+  }
   var I = {
     back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>',
     close: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
@@ -193,13 +199,7 @@
 
   function welcome() {
     return '<div class="welcome">' +
-      '<div class="rel" style="height:240px" aria-hidden="true">' +
-      '<div style="position:absolute;left:20px;top:36px;width:210px;height:100px;border-radius:12px;background:#C9B8EA;border:2px solid #8E74C9;transform:rotate(-10deg)"></div>' +
-      '<div style="position:absolute;left:46px;top:58px;width:210px;height:100px;border-radius:12px;background:#F6C79A;border:2px solid #D98A45;transform:rotate(-3deg)"></div>' +
-      '<div style="position:absolute;left:72px;top:80px;width:210px;height:100px;border-radius:12px;background:#A9C8EE;border:2px solid #5E8FCB;transform:rotate(5deg);display:flex;align-items:center;padding:0 18px;color:#143E6E;font-size:26px;font-weight:700">¥1,000</div>' +
-      '<div style="position:absolute;left:190px;top:160px;width:62px;height:62px;border-radius:50%;background:#E6CB76;border:4px solid #B8963A;display:flex;align-items:center;justify-content:center;color:#4A3806;font-weight:700">50</div>' +
-      '<div style="position:absolute;left:242px;top:184px;width:50px;height:50px;border-radius:50%;background:#DADCE0;border:4px solid #A2A6AD;display:flex;align-items:center;justify-content:center;color:#33363B;font-weight:700;font-size:14px">100</div>' +
-      '<div style="position:absolute;left:140px;top:188px;width:44px;height:44px;border-radius:50%;background:#DDA27A;border:4px solid #A8653A;display:flex;align-items:center;justify-content:center;color:#4A2410;font-weight:700;font-size:13px">10</div></div>' +
+      '<div class="col gap14" style="align-items:flex-start;padding-top:24px">' + LOGO(112) + '<span style="font-size:15px;font-weight:600;color:#E6CB76;letter-spacing:0.3px">Travel Wallet</span></div>' +
       '<div class="col gap12"><h1 style="font-size:34px;line-height:1.1">Know every note and coin in your wallet</h1><p style="color:#D8C9B6;line-height:1.5">Log what you spend abroad, see exactly what\'s left, and keep leftover cash ready for your next trip.</p></div>' +
       '<div class="grow"></div>' +
       '<button class="btn" style="background:#F4EAD9;color:#3F322B"' + A(function () { set({ view: 'ob', obStep: 1 }); }) + '>Get started</button></div>';
@@ -699,7 +699,8 @@
       '<div class="row gap8"><button class="btn-soft" style="background:#FFFDF9"' + A(downloadBackup) + '>Save a backup</button><label class="btn-soft" style="background:#FFFDF9;display:inline-flex;align-items:center;cursor:pointer">Restore<input type="file" accept="application/json,.json" data-file="1" style="display:none"></label>' +
       (S.confirmReset ? '' : '<button class="btn-danger-soft" style="margin-left:auto"' + A(function () { set({ confirmReset: true }); }) + '>Erase all</button>') + '</div>' +
       (S.confirmReset ? '<div class="row gap8"><span class="grow small bold">Erase every trip and your stash?</span><button class="btn-soft" style="background:#FFFDF9"' + A(function () { set({ confirmReset: false }); }) + '>Keep</button><button class="btn-danger"' + A(function () { var keep = { deviceId: db.deviceId, pushOn: db.pushOn, remind: db.remind }; db = Object.assign(clone(DB0), keep); save(); set({ settings: false, confirmReset: false, view: 'welcome' }); }) + '>Erase</button></div>' : '') + '</div>' +
-      '<button class="btn btn-primary"' + A(function () { set({ settings: false, confirmReset: false }); }) + '>Done</button></div></div>';
+      '<button class="btn btn-primary"' + A(function () { set({ settings: false, confirmReset: false }); }) + '>Done</button>' +
+      '<div class="row" style="justify-content:center;gap:8px;padding-top:4px">' + LOGO(22) + '<span class="xs muted" style="line-height:1.4">Travel Wallet · Version ' + APP_VERSION + '<br>Updated ' + APP_UPDATED + '</span></div></div></div>';
   }
 
   // ===================== backup =====================
