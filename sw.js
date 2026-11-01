@@ -1,5 +1,5 @@
 // Travel Wallet service worker: works offline and shows the nightly notification.
-const CACHE = 'tw-app-v5';
+const CACHE = 'tw-app-v6';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'config.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

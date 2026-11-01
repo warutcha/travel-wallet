@@ -156,7 +156,26 @@
   if (!db.deviceId) { db.deviceId = uuid(); persist(); }
   function persist() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { toast("Couldn't save. Your phone may be out of space."); } }
   function save() { persist(); writeSummary(); schedulePushSync(); }
-  function activeTrip() { for (var i = 0; i < db.trips.length; i++) if (db.trips[i].id === db.activeId) return db.trips[i]; return null; }
+  // Several trips can be open. "Now" is picked by date: a trip under way, else the latest one that started
+  // but wasn't ended, else the next one to start. viewId lets you look at another open trip for a while.
+  var viewId = null;
+  function tripEnd(t) { return addDays(t.start, t.days - 1); }
+  function openTrips() { return db.trips.filter(function (t) { return !t.ended; }).sort(function (a, b) { return a.start < b.start ? -1 : a.start > b.start ? 1 : a.id - b.id; }); }
+  function nowTrip() {
+    var open = openTrips(), td = today(), pick = null;
+    open.forEach(function (t) { if (!pick && t.start <= td && tripEnd(t) >= td) pick = t; });
+    if (pick) return pick;
+    open.forEach(function (t) { if (t.start <= td) pick = t; });
+    if (pick) return pick;
+    return open[0] || null;
+  }
+  function activeTrip() {
+    if (viewId != null) { var v = tripById(viewId); if (v && !v.ended) return v; viewId = null; }
+    return nowTrip();
+  }
+  function isViewingOther() { var n = nowTrip(), a = activeTrip(); return !!(a && n && a.id !== n.id); }
+  function viewTrip(id, v) { viewId = id; var n = nowTrip(); if (n && n.id === id) viewId = null; set({ view: v || 'home', tripMenu: null, open: null, confirmEnd: false }); }
+  function untilText(t) { var d = daysBetween(today(), t.start); return d <= 0 ? '' : (d === 1 ? 'Starts tomorrow' : 'Starts in ' + d + ' days'); }
 
   // ===================== UI state =====================
   var DRAFT0 = { method: 'cash', cardId: null, digits: '', cat: 'Food', name: '', given: {}, got: null, err: '', editId: null, back: 'home' };
@@ -173,7 +192,7 @@
     draft: clone(DRAFT0), nt: clone(NT0), ac: clone(AC0), sa: clone(SA0), ct: clone(CT0), rc: clone(RC0), te: null,
     ca: clone(CA0), it: clone(IT0), bk: clone(BK0), pastId: null,
     open: null, confirmDel: null, stashOpen: null, stashDel: null, confirmEnd: false,
-    coinSheet: null, csMode: 'menu', csQty: 1, cardSheet: null, tripMenu: null, delTrip: null, delMode: 'keep',
+    coinSheet: null, csMode: 'menu', csQty: 1, cardSheet: null, tripMenu: null, delTrip: null, delMode: 'keep', cal: null,
     settings: false, confirmReset: false, toast: '', pushMsg: '', pushBusy: false
   };
   function set(o) { Object.assign(S, o); render(); }
@@ -205,7 +224,7 @@
   root.addEventListener('change', function (e) { var el = e.target.closest('[data-file]'); if (el && el.files && el.files[0]) restoreBackup(el.files[0]); });
 
   // ===================== icons & small parts =====================
-  var APP_VERSION = '1.2.0', APP_UPDATED = '1 Nov 2026';
+  var APP_VERSION = '1.3.0', APP_UPDATED = '2 Nov 2026';
   function LOGO(size) {
     return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 96 96" role="img" aria-label="Travel Wallet logo"><rect width="96" height="96" rx="22" fill="#1F6B52"/>' +
       '<circle cx="48" cy="48" r="28" fill="#E6CB76" stroke="#B8963A" stroke-width="4"/><circle cx="48" cy="48" r="21" fill="none" stroke="#B8963A" stroke-width="1.6" stroke-dasharray="2 3"/>' +
@@ -227,6 +246,7 @@
     chart: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11M11 20V5M17 20v-6M3 20h18"/></svg>',
     box: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>',
     plane: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 10h4a2 2 0 0 1 0 4h-4l-4 7h-3l2-7H7l-2 2H2l2-4-2-4h3l2 2h4L9 3h3z"/></svg>',
+    cal: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
     dots: '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
     flight: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 10h4a2 2 0 0 1 0 4h-4l-4 7h-3l2-7H7l-2 2H2l2-4-2-4h3l2 2h4L9 3h3z"/></svg>',
     bed: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18V6M3 14h18v4M21 14v-2a3 3 0 0 0-3-3h-7v5"/><circle cx="7" cy="11" r="2"/></svg>',
@@ -308,13 +328,26 @@
 
   function tripDates(t) { return dateText(t.start) + ' – ' + dateText(addDays(t.start, t.days - 1)); }
   function moreBtn(t, dark) { return '<button class="more-btn' + (dark ? ' on-dark' : '') + '" aria-label="More for ' + esc(t.name) + '"' + A(function () { set({ tripMenu: t.id }); }) + '>' + I.dots + '</button>'; }
-  function trips(T) {
-    var past = db.trips.filter(function (t) { return t.ended; });
+  function upcomingRight(t) {
+    var C = CURS[t.cur], booked = 0; (t.bookings || []).forEach(function (b) { booked += bookingBaht(b, t); });
+    if (booked) return '<span class="col" style="align-items:flex-end;flex:none"><span class="bolder" style="font-size:14px">' + thb(booked) + '</span><span class="xs muted">booked</span></span>';
+    return '<span class="col" style="align-items:flex-end;flex:none"><span class="bolder" style="font-size:14px">' + money(total(t.wallet, C), C) + '</span><span class="xs muted">cash</span></span>';
+  }
+  function trips() {
+    var past = db.trips.filter(function (t) { return t.ended; }), N = nowTrip(), up = openTrips().filter(function (t) { return !N || t.id !== N.id; });
     var out = '<div class="scroll with-nav"><div class="between" style="align-items:center"><div class="col"><span class="small muted">Travel wallet</span><span style="font-size:30px;font-weight:700">Trips</span></div><button class="icon-btn sm" aria-label="Settings"' + A(function () { set({ settings: true }); }) + '>' + I.sliders + '</button></div>';
-    if (T) {
-      var C = CURS[T.cur];
-      out += '<div class="rel"><button class="dark col gap6" style="width:100%;border-radius:24px;padding:18px;text-align:left;background:#3F322B;color:#F4EAD9"' + A(go('home')) + '><span class="small" style="color:#C9B8A5">Current trip</span><span style="font-size:22px;font-weight:700;padding-right:44px">' + esc(T.name) + '</span><span style="font-size:14px;color:#D8C9B6"><span class="flag">' + C.flag + '</span> ' + C.country + ' · ' + tripDates(T) + '</span><span class="bold" style="margin-top:4px">Open wallet · ' + money(total(T.wallet, C), C) + '</span></button>' +
-        '<span style="position:absolute;top:12px;right:12px">' + moreBtn(T, true) + '</span></div>';
+    if (N) {
+      var C = CURS[N.cur], soon = daysBetween(today(), N.start) > 0;
+      out += '<span class="section-label">' + (soon ? 'Now · next up' : 'Now') + '</span>' +
+        '<div class="rel"><button class="dark col gap6" style="width:100%;border-radius:24px;padding:18px;text-align:left;background:#3F322B;color:#F4EAD9"' + A(function () { viewTrip(N.id); }) + '>' +
+        (soon ? '<span class="countdown-chip">' + I.flight + untilText(N) + '</span>' : '<span class="small" style="color:#C9B8A5">' + dayLabel(N) + '</span>') +
+        '<span style="font-size:22px;font-weight:700;padding-right:44px">' + esc(N.name) + '</span><span style="font-size:14px;color:#D8C9B6"><span class="flag">' + C.flag + '</span> ' + C.country + ' · ' + tripDates(N) + '</span><span class="bold" style="margin-top:4px">Open wallet · ' + money(total(N.wallet, C), C) + '</span></button>' +
+        '<span style="position:absolute;top:12px;right:12px">' + moreBtn(N, true) + '</span></div>';
+      out += '<div class="col gap10"><div class="between" style="align-items:center"><h2 style="font-size:18px">Upcoming</h2><button class="link"' + A(newTrip) + '>+ New trip</button></div>' +
+        (up.length ? up.map(function (t) {
+          var C2 = CURS[t.cur], u = untilText(t);
+          return '<div class="card row gap8" style="padding:10px 10px 10px 14px;border-radius:18px"><button class="row gap12 grow" style="text-align:left" aria-label="Open ' + esc(t.name) + '"' + A(function () { viewTrip(t.id); }) + '>' + flagBadge(C2, 40, 22) + '<span class="col grow"><span class="bold ellipsis">' + esc(t.name) + '</span><span class="xs muted">' + tripDates(t) + '</span>' + (u ? '<span class="countdown-text">' + u + '</span>' : '<span class="xs muted">' + dayLabel(t) + '</span>') + '</span>' + upcomingRight(t) + '</button>' + moreBtn(t) + '</div>';
+        }).join('') : '<span class="small muted" style="line-height:1.5">Booked another trip? Add it here. It waits with its own wallet and bookings, and becomes "Now" on its first day.</span>') + '</div>';
     } else {
       out += '<div class="card col gap10" style="border-radius:24px;padding:22px 18px;align-items:flex-start"><span style="font-size:22px;font-weight:700">Where to next?</span><span class="muted" style="line-height:1.5">Create a trip and pick the country. We\'ll load its notes and coins so you can track every one.</span><button class="btn btn-primary" style="padding:13px 20px;min-height:50px;font-size:16px"' + A(newTrip) + '>New trip</button></div>';
     }
@@ -330,7 +363,7 @@
 
   function picker(mode) {
     var ctx = mode === 'newtrip' ?
-      { kicker: 'New trip · step 1 of 3', title: 'Where are you going?', sub: "Pick the country and we'll load its real notes and coins.", pick: function (code) { set({ nt: Object.assign(clone(NT0), { step: 'details', cur: code, name: CURS[code].country + ' trip', start: S.nt.start || today() }) }); }, back: function () { set({ view: activeTrip() ? 'home' : 'trips', nt: clone(NT0) }); } } :
+      { kicker: 'New trip · step 1 of 3', title: 'Where are you going?', sub: "Pick the country and we'll load its real notes and coins.", pick: function (code) { set({ nt: Object.assign(clone(NT0), { step: 'details', cur: code, name: CURS[code].country + ' trip', start: S.nt.start || today() }) }); }, back: function () { set({ view: 'trips', nt: clone(NT0) }); } } :
       { kicker: 'Leftover cash', title: 'Which currency is it?', sub: 'Pick the country your leftover cash is from.', pick: function (code) { set({ sa: Object.assign({}, S.sa, { step: 'count', cur: code, counts: clone((db.stash[code] || {}).counts || {}) }) }); }, back: function () { if (S.sa.fromOb) { db.stage = 'setup'; persist(); set({ view: 'ob', obStep: 2, sa: clone(SA0) }); } else set({ view: S.sa.back, sa: clone(SA0) }); } };
     return '<div class="scroll"><div class="row gap12">' + backBtn(ctx.back) + '<span class="kicker">' + ctx.kicker + '</span></div>' +
       '<div class="col gap6"><h1 style="font-size:28px">' + ctx.title + '</h1><p class="muted" style="line-height:1.5">' + ctx.sub + '</p></div><div class="col gap8">' +
@@ -342,12 +375,47 @@
       }).join('') + '</div></div>';
   }
 
+  function rangeText(a, b) {
+    var da = parseYmd(a), dbb = parseYmd(b);
+    if (a === b) return dateText(a);
+    if (da.getMonth() === dbb.getMonth() && da.getFullYear() === dbb.getFullYear()) return DAYS[da.getDay()] + ' ' + da.getDate() + ' – ' + dateText(b);
+    return dateText(a) + ' – ' + dateText(b);
+  }
   function dateFields(o, setter) {
-    return '<div class="card col gap12" style="border-radius:18px;padding:14px">' +
-      '<div class="row"><span class="col grow"><span class="small muted">Starts</span><span style="font-size:17px;font-weight:600">' + dateText(o.start) + '</span></span><button class="step-btn" aria-label="Earlier"' + A(function () { setter({ start: addDays(o.start, -1) }); }) + '>‹</button><button class="step-btn" aria-label="Later"' + A(function () { setter({ start: addDays(o.start, 1) }); }) + '>›</button></div>' +
-      '<div style="height:1px;background:#EDE4D8"></div>' +
-      '<div class="row"><span class="col grow"><span class="small muted">Length</span><span style="font-size:17px;font-weight:600">' + o.days + (o.days === 1 ? ' day' : ' days') + '</span></span><button class="step-btn" aria-label="Fewer days"' + A(function () { setter({ days: Math.max(1, o.days - 1) }); }) + '>−</button><button class="step-btn" aria-label="More days"' + A(function () { setter({ days: Math.min(90, o.days + 1) }); }) + '>+</button></div>' +
-      '<span class="small muted">Ends ' + dateText(addDays(o.start, o.days - 1)) + '</span></div>';
+    var end = addDays(o.start, o.days - 1);
+    return '<button class="card row gap12" style="border-radius:18px;padding:14px;text-align:left;width:100%" aria-label="Trip dates, ' + esc(rangeText(o.start, end)) + '"' + A(function () {
+      set({ cal: { apply: setter, a: o.start, b: end, picking: false, month: o.start.slice(0, 7) } });
+    }) + '><span class="cal-ic">' + I.cal + '</span><span class="col grow"><span class="small muted">Dates</span><span style="font-size:17px;font-weight:600">' + rangeText(o.start, end) + '</span><span class="small muted">' + o.days + (o.days === 1 ? ' day' : ' days') + '</span></span>' + I.right + '</button>';
+  }
+  function calSheet() {
+    var c = S.cal, close = function () { set({ cal: null }); };
+    var y = +c.month.slice(0, 4), m = +c.month.slice(5, 7) - 1, first = new Date(y, m, 1, 12), nDays = new Date(y, m + 1, 0, 12).getDate(), td = today();
+    function shift(k) { var d = new Date(y, m + k, 1, 12); set({ cal: Object.assign({}, S.cal, { month: ymdOf(d).slice(0, 7) }) }); }
+    function pick(day) {
+      var cc = S.cal;
+      if (!cc.picking || day < cc.a) set({ cal: Object.assign({}, cc, { a: day, b: null, picking: true }) });
+      else if (daysBetween(cc.a, day) >= 90) toast('A trip can be up to 90 days');
+      else set({ cal: Object.assign({}, cc, { b: day, picking: false }) });
+    }
+    var cells = '';
+    ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(function (d) { cells += '<span class="cal-h">' + d + '</span>'; });
+    for (var i = 0; i < first.getDay(); i++) cells += '<span></span>';
+    for (var d = 1; d <= nDays; d++) {
+      var ymd = c.month + '-' + pad2(d), isA = ymd === c.a, isB = c.b && ymd === c.b, inR = c.b && ymd > c.a && ymd < c.b;
+      var band = c.b && c.a !== c.b ? (isA ? ' band-start' : (isB ? ' band-end' : (inR ? ' band' : ''))) : '';
+      cells += '<span class="cal-cell' + band + '"><button class="cal-day' + (isA || isB ? ' sel' : '') + (ymd === td && !isA && !isB ? ' today' : '') + '" aria-label="' + dateText(ymd) + '"' + A((function (v) { return function () { pick(v); }; })(ymd)) + '>' + d + '</button></span>';
+    }
+    var days = c.b ? daysBetween(c.a, c.b) + 1 : 0;
+    var status = c.picking ? 'Now tap the last day' : rangeText(c.a, c.b) + ' · ' + days + (days === 1 ? ' day' : ' days');
+    return '<div class="overlay"><button class="overlay-hit" aria-label="Close"' + A(close) + '></button><div class="sheet" role="dialog" aria-label="Trip dates"><div class="grabber"></div>' +
+      '<div class="between" style="align-items:center"><span style="font-size:20px;font-weight:700">Trip dates</span><span class="small muted">Tap first day, then last</span></div>' +
+      '<div class="row" style="justify-content:space-between"><button class="step-btn sm" aria-label="Previous month"' + A(function () { shift(-1); }) + '>‹</button><span style="font-size:17px;font-weight:700">' + ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][m] + ' ' + y + '</span><button class="step-btn sm" aria-label="Next month"' + A(function () { shift(1); }) + '>›</button></div>' +
+      '<div class="cal-grid">' + cells + '</div>' +
+      '<div class="note-box ' + (c.picking ? 'note-warn' : 'note-ok') + ' bold" style="text-align:center">' + status + '</div>' +
+      '<button class="btn btn-primary"' + A(function () {
+        var cc = S.cal, b2 = cc.b || cc.a;
+        cc.apply({ start: cc.a, days: daysBetween(cc.a, b2) + 1 }); set({ cal: null });
+      }) + '>Done</button></div></div>';
   }
   function details() {
     var nt = S.nt, C = CURS[nt.cur];
@@ -460,7 +528,7 @@
     if (useS) delete db.stash[C.code];
     var cards = useS ? (rec.cards || []).map(function (k) { return Object.assign({}, k, { id: uuid() }); }) : [];
     var t = { id: ts, name: String(nt.name || '').trim() || C.country + ' trip', cur: C.code, start: nt.start || today(), days: nt.days, rate: C.rate, wallet: wallet, card: card, cards: cards, bookings: [], expenses: exps, ended: false, checkedDate: '' };
-    db.trips.unshift(t); db.activeId = t.id; save();
+    db.trips.unshift(t); viewId = t.id; if (nowTrip() && nowTrip().id === t.id) viewId = null; save();
     set({ view: 'home', nt: clone(NT0) });
     toast('Trip started. Have a great time in ' + C.country);
   }
@@ -474,7 +542,7 @@
   function markChecked(T) { T.checkedDate = nightKey(); save(); }
   function dayLabel(T) {
     var d = daysBetween(T.start, today());
-    if (d < 0) return 'Starts ' + dateText(T.start);
+    if (d < 0) return untilText(T);
     if (d >= T.days) return 'Ended ' + dateText(addDays(T.start, T.days - 1));
     return 'Day ' + (d + 1) + ' of ' + T.days;
   }
@@ -547,6 +615,7 @@
       '<div class="row" style="justify-content:space-between;gap:10px"><button class="col grow" style="align-items:flex-start;gap:2px;text-align:left"' + A(go('trips')) + '><span class="small muted ellipsis" style="max-width:100%">' + C.country + ' · ' + dayLabel(T) + '</span><span class="row" style="font-size:24px;font-weight:700;gap:6px;max-width:100%;min-width:0"><span class="ellipsis">' + esc(T.name) + '</span>' + I.chev + '</span></button>' +
       '<div class="row gap8" style="flex:none"><button class="icon-btn sm" aria-label="Settings"' + A(function () { set({ settings: true }); }) + '>' + I.sliders + '</button>' +
       '<span aria-label="Currency ' + C.code + '" style="width:40px;height:40px;background:' + C.badgeBg + ';color:' + C.badgeFg + ';border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:none"><span class="flag" style="font-size:16px">' + C.flag + '</span><span style="font-size:10px;font-weight:700;line-height:1">' + C.code + '</span></span></div></div>' +
+      viewingBanner(T) + countdownCard(T) +
       '<div class="dark col gap12" style="border-radius:26px;padding:20px"><span style="font-size:14px;color:#C9B8A5;font-weight:500">Cash in your wallet</span><span style="font-size:40px;font-weight:700;line-height:1;letter-spacing:-0.5px">' + money(cashSum, C) + '</span>' +
       '<div class="wrap" style="gap:8px"><button class="card-pill" style="background:#57473E;color:#F4EAD9"' + A(function () { set({ cardSheet: 'travel' }); }) + '>Travel card ' + money(T.card, C) + '</button>' +
         T.cards.map(function (k) { return '<button class="card-pill" style="background:' + k.color + ';color:' + onColor(k.color) + '"' + A(function () { set({ cardSheet: k.id }); }) + '>' + esc(k.name) + ' ' + money(k.bal, C) + '</button>'; }).join('') +
@@ -556,12 +625,21 @@
       '<div class="col gap10"><div class="between"><h2>Notes</h2><span class="small muted">' + noteCount(w, C) + ' notes · ' + money(cashSum - coinValue(w, C), C) + '</span></div><div class="grid2">' + notes + '</div></div>' +
       (C.coins.length ? '<div class="col gap12"><div class="between"><h2>Coins</h2><span class="small muted">' + money(coinValue(w, C), C) + '</span></div><div class="wrap" style="gap:16px 14px;padding:4px 4px 0">' + coins + '</div></div>' : '') +
       '<span class="xs muted" style="margin-top:-8px">Tap a note or coin if you lost one, gave one away, or found an extra.</span>' +
-      (cc > 0 ? '<div class="note-box note-warn">Coins can\'t be changed back to baht. Try paying small things with them first.</div>' : '') +
       '<div class="grid3"><button class="btn-secondary" style="border-radius:14px;padding:10px 4px;font-size:14px;font-weight:600;min-height:48px"' + A(openAddCash) + '>Add cash</button><button class="btn-secondary" style="border-radius:14px;padding:10px 4px;font-size:14px;font-weight:600;min-height:48px"' + A(function () { set({ view: 'cardtop', ct: clone(CT0) }); }) + '>Top up card</button>' + rcBtn + '</div>' +
       (recent.length ? '<div class="col gap10"><div class="between"><h2>Recent</h2><button class="link"' + A(go('history')) + '>See all</button></div>' + entryRows(T, recent) + '</div>' : '') +
       '</div>';
   }
 
+  function viewingBanner(T) {
+    if (!isViewingOther()) return '';
+    var N = nowTrip(), soon = daysBetween(today(), T.start) > 0;
+    return '<div class="row gap10" style="background:#FBEFD2;color:#5E4306;border-radius:16px;padding:12px 14px"><span class="grow" style="font-size:14px;line-height:1.45">' + (soon ? 'Looking at an upcoming trip.' : 'Looking at another open trip.') + ' Your wallet for ' + esc(N.name) + ' is untouched.</span><button class="btn-soft" style="background:#5E4306;color:#fff;flex:none"' + A(function () { viewTrip(N.id); }) + '>Back</button></div>';
+  }
+  function countdownCard(T) {
+    var d = daysBetween(today(), T.start);
+    if (d <= 0) return '';
+    return '<div class="countdown-card"><span class="countdown-ic">' + I.flight + '</span><span class="col grow"><span style="font-size:22px;font-weight:700;line-height:1.1">' + (d === 1 ? 'Tomorrow!' : d + ' days to go') + '</span><span class="small muted">' + tripDates(T) + ' · ' + T.days + (T.days === 1 ? ' day' : ' days') + '</span></span></div>';
+  }
   function checkScreen(T) {
     var C = CURS[T.cur], w = T.wallet;
     return '<div class="scroll"><div class="row gap12">' + backBtn(go('home')) + '<span class="kicker ellipsis">' + esc(T.name) + '</span></div>' +
@@ -726,10 +804,10 @@
     if (total(rec.counts, C) || rec.card || rec.cards.length) db.stash[T.cur] = rec;
   }
   function deleteTrip(T, keepMoney) {
-    var C = CURS[T.cur], wasActive = db.activeId === T.id;
+    var C = CURS[T.cur], wasActive = !T.ended;
     if (wasActive && keepMoney) stashLeftovers(T);
     db.trips = db.trips.filter(function (t) { return t.id !== T.id; });
-    if (wasActive) db.activeId = null;
+    if (viewId === T.id) viewId = null;
     save(); set({ view: 'trips', delTrip: null, tripMenu: null, pastId: null, te: null });
     toast(T.name + ' deleted' + (wasActive && keepMoney ? '. Money kept in your ' + C.country + ' stash' : ''));
   }
@@ -769,9 +847,8 @@
     return '<div class="scroll with-nav"><div class="col"><span class="small muted">' + C.country + ' · ' + tripDates(T) + '</span><span style="font-size:28px;font-weight:700">Trip summary</span></div>' +
       summaryBody(T, false) +
       '<div class="card col gap10"><div class="between"><span class="bold">What\'s left</span><span class="bolder">' + cash + '</span></div><div class="wrap">' + chipsHtml(w, C) + '</div><span class="small muted">Plus ' + money(T.card, C) + ' on the travel card' + T.cards.map(function (k) { return ', ' + money(k.bal, C) + ' on ' + esc(k.name); }).join('') + '</span></div>' +
-      (cc ? '<div class="note-box note-warn">' + cc + ' coins (' + money(coinValue(w, C), C) + ') can\'t be changed back. They\'ll wait in your stash for your next trip to ' + C.country + '.</div>' : '') +
       (S.confirmEnd ? '<div class="card col gap12" style="border:2px solid #1F6B52"><span class="bold">End this trip?</span><span class="muted" style="font-size:14px;line-height:1.5">' + esc(moneyLeftText(T)) + ' move to your stash. They\'ll load into your next trip to ' + C.country + '.</span><div class="row gap8"><button class="btn btn-soft grow" style="min-height:48px;font-size:15px"' + A(function () { set({ confirmEnd: false }); }) + '>Not yet</button><button class="btn btn-primary grow" style="min-height:48px;font-size:15px;padding:12px"' + A(function () {
-        stashLeftovers(T); T.ended = true; db.activeId = null; save(); set({ view: 'trips', confirmEnd: false }); toast('Trip ended. Leftovers saved to your ' + C.country + ' stash');
+        stashLeftovers(T); T.ended = true; if (viewId === T.id) viewId = null; save(); set({ view: 'trips', confirmEnd: false }); toast('Trip ended. Leftovers saved to your ' + C.country + ' stash');
       }) + '>End and save</button></div></div>' : '<button class="btn btn-primary"' + A(function () { set({ confirmEnd: true }); }) + '>End trip</button>') + '</div>';
   }
   function pastTrip(T) {
@@ -916,7 +993,7 @@
   function overlays() {
     var T = activeTrip(), out = '';
     var navViews = ['home', 'history', 'summary', 'stash', 'trips'];
-    if (db.stage === 'app' && !S.coinSheet && !S.settings && !S.cardSheet && !S.tripMenu && !S.delTrip && navViews.indexOf(S.view) >= 0) {
+    if (db.stage === 'app' && !S.coinSheet && !S.settings && !S.cal && !S.cardSheet && !S.tripMenu && !S.delTrip && navViews.indexOf(S.view) >= 0) {
       if (T) out += '<nav class="nav nav5" aria-label="Main">' +
         '<button class="nav-item' + (S.view === 'home' ? ' on' : '') + '"' + A(go('home')) + '>' + I.wallet + 'Wallet</button>' +
         '<button class="nav-item' + (S.view === 'history' ? ' on' : '') + '"' + A(go('history')) + '>' + I.list + 'History</button>' +
@@ -932,6 +1009,7 @@
     if (S.cardSheet && T) out += cardSheet(T);
     if (S.tripMenu) out += tripMenuSheet();
     if (S.delTrip) out += delTripSheet();
+    if (S.cal) out += calSheet();
     if (S.settings) out += settingsSheet(T);
     if (S.toast) out += '<div class="toast" role="status">' + esc(S.toast) + '</div>';
     return out;
@@ -984,7 +1062,7 @@
     var t = tripById(S.tripMenu); if (!t) return '';
     var C = CURS[t.cur], close = function () { set({ tripMenu: null }); };
     var acts = [
-      ['Open trip summary', function () { if (t.ended) set({ view: 'past', pastId: t.id, tripMenu: null, open: null }); else set({ view: 'summary', tripMenu: null }); }, ''],
+      ['Open trip summary', function () { if (t.ended) set({ view: 'past', pastId: t.id, tripMenu: null, open: null }); else viewTrip(t.id, 'summary'); }, ''],
       ['Edit name and dates', function () { openTripEdit(t.id); }, ''],
       ['Delete trip', function () { set({ tripMenu: null, delTrip: t.id, delMode: 'keep' }); }, 'background:#F8DEDC;color:#7A1F1B']
     ];
@@ -993,7 +1071,7 @@
   }
   function delTripSheet() {
     var t = tripById(S.delTrip); if (!t) return '';
-    var C = CURS[t.cur], close = function () { set({ delTrip: null }); }, cur = db.activeId === t.id, St = db.stash[t.cur];
+    var C = CURS[t.cur], close = function () { set({ delTrip: null }); }, cur = !t.ended, St = db.stash[t.cur];
     var n = t.expenses.length, body = '<span style="font-size:20px;font-weight:700">Delete ' + esc(t.name) + '?</span>';
     if (cur) {
       var hasMoney = total(t.wallet, C) || t.card || t.cards.some(function (k) { return k.bal; });
@@ -1096,7 +1174,7 @@
     });
   }
   function pushState() {
-    var T = activeTrip();
+    var T = nowTrip();
     return { id: db.deviceId, enabled: !!db.remind.on, time: hhmm(db.remind.mins), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, tripActive: !!T, tripName: T ? T.name : '', checkedDate: T ? (T.checkedDate || '') : '' };
   }
   function syncPush() {
@@ -1124,7 +1202,7 @@
   // summary for the service worker to show in the notification
   function writeSummary() {
     if (!('caches' in window)) return;
-    var T = activeTrip(), text = '';
+    var T = nowTrip(), text = '';
     if (T) { var C = CURS[T.cur]; text = 'You should have ' + money(total(T.wallet, C), C) + ': ' + noteCount(T.wallet, C) + ' notes and ' + coinsOf(T.wallet, C) + ' coins.'; }
     var url = new URL('./tw-summary', location.href).href;
     caches.open('tw-meta').then(function (c) { return c.put(url, new Response(JSON.stringify({ text: text }), { headers: { 'Content-Type': 'application/json' } })); }).catch(function () { });
@@ -1143,9 +1221,9 @@
   // ===================== start =====================
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(function () { });
-    navigator.serviceWorker.addEventListener('message', function (e) { if (e.data && e.data.type === 'open-check' && activeTrip()) set({ view: 'check', settings: false, coinSheet: null }); });
+    navigator.serviceWorker.addEventListener('message', function (e) { if (e.data && e.data.type === 'open-check' && nowTrip()) { viewId = null; } if (e.data && e.data.type === 'open-check' && nowTrip()) set({ view: 'check', settings: false, coinSheet: null }); });
   }
-  if (/[?&]check=1/.test(location.search)) { if (activeTrip()) S.view = 'check'; history.replaceState(null, '', location.pathname); }
+  if (/[?&]check=1/.test(location.search)) { if (nowTrip()) S.view = 'check'; history.replaceState(null, '', location.pathname); }
   if (db.stage !== 'app' && S.view !== 'welcome') S.view = 'welcome';
   render();
   writeSummary();
