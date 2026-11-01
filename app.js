@@ -62,10 +62,51 @@
   function describe(c, C) { var p = []; C.den.forEach(function (d) { var n = c && c[d.id]; if (n) p.push((n > 1 ? n + '×' : '') + d.label); }); return p.length ? p.join(' + ') : 'nothing'; }
   function merge(a, b, sign, C) { var r = {}; C.den.forEach(function (d) { var n = ((a && a[d.id]) || 0) + sign * ((b && b[d.id]) || 0); if (n) r[d.id] = n; }); return r; }
   function bump(c, id, delta, max) { var r = Object.assign({}, c); var n = (r[id] || 0) + delta; if (n < 0) n = 0; if (max != null && n > max) n = max; if (n) r[id] = n; else delete r[id]; return r; }
-  function cashy(m) { return m === 'cash' || m === 'topup' || m === 'lost' || m === 'adjust'; }
+  function cashy(m) { return m === 'cash' || m === 'topup' || m === 'lost' || m === 'adjust' || m === 'icin'; }
   function applyE(w, card, e, sign, C) { var w2 = w, c2 = card; if (cashy(e.method)) w2 = merge(merge(w, e.given, -sign, C), e.got, sign, C); if (e.method === 'card') c2 = card - sign * e.amount; if (e.method === 'cardin') c2 = card + sign * e.amount; return { w: w2, c: c2 }; }
   function okW(w, c, C) { return c >= 0 && !C.den.some(function (x) { return (w[x.id] || 0) < 0; }); }
   function parseAmount(str, C) { var n = parseFloat(String(str || '').replace(/[, ]/g, '')); return isFinite(n) && n > 0 ? Math.round(n * C.minor) : 0; }
+  // Apply/undo an entry on cash wallet, travel card and IC cards together.
+  function applyAll(T, oldE, newE, C) {
+    var s = { w: T.wallet, c: T.card, k: clone(T.cards || []) };
+    function ap(e, sign) {
+      var r = applyE(s.w, s.c, e, sign, C); s.w = r.w; s.c = r.c;
+      if (e.cardId) s.k.forEach(function (k) { if (k.id === e.cardId) { if (e.method === 'ic') k.bal -= sign * e.amount; else if (e.method === 'icin' || e.method === 'icfix') k.bal += sign * e.amount; } });
+    }
+    if (oldE) ap(oldE, -1);
+    if (newE) ap(newE, 1);
+    if (!okW(s.w, s.c, C) || s.k.some(function (k) { return k.bal < 0; })) return null;
+    return s;
+  }
+  function commitE(T, oldE, newE) {
+    var s = applyAll(T, oldE, newE, CURS[T.cur]); if (!s) return false;
+    T.wallet = s.w; T.card = s.c; T.cards = s.k;
+    if (oldE && newE) T.expenses = T.expenses.map(function (x) { return x.id === oldE.id ? newE : x; });
+    else if (newE) T.expenses = [newE].concat(T.expenses);
+    else if (oldE) T.expenses = T.expenses.filter(function (x) { return x.id !== oldE.id; });
+    save(); return true;
+  }
+  function tripById(id) { for (var i = 0; i < db.trips.length; i++) if (db.trips[i].id === id) return db.trips[i]; return null; }
+  function cardOf(T, id) { var r = null; (T.cards || []).forEach(function (k) { if (k.id === id) r = k; }); return r; }
+  // Text color for a card face; '#291F1A' (not the theme ink) so night mode never recolors it.
+  function onColor(hex) { var n = parseInt(hex.slice(1), 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255; return (0.299 * r + 0.587 * g + 0.114 * b) > 165 ? '#291F1A' : '#FFFFFF'; }
+  function isSpend(m) { return m === 'cash' || m === 'card' || m === 'credit' || m === 'ic'; }
+  function spendTotal(T) { var s = 0; T.expenses.forEach(function (e) { if (isSpend(e.method)) s += e.amount; }); return s; }
+  function thb(v) { return '฿' + Math.round(v).toLocaleString('en-US'); }
+  function bookingBaht(b, T) { var C = CURS[T.cur]; return b.cur === 'THB' ? b.amount / 100 : b.amount / C.minor * T.rate; }
+  function bookingText(b, T) { var C = CURS[T.cur]; return b.cur === 'THB' ? '฿' + (b.amount / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }) : money(b.amount, C); }
+  var IC_PRESETS = { JPY: [
+    { name: 'Suica', color: '#3E9B4F', sub: 'Tokyo · JR East' }, { name: 'Welcome Suica', color: '#C8423B', sub: 'Visitor card' },
+    { name: 'PASMO', color: '#E58BB0', sub: 'Tokyo' }, { name: 'ICOCA', color: '#3A8FD6', sub: 'Osaka, Kyoto · JR West' },
+    { name: 'TOICA', color: '#2F6FB8', sub: 'Nagoya · JR Central' }, { name: 'manaca', color: '#F2C230', sub: 'Nagoya' },
+    { name: 'SUGOCA', color: '#F3B6C8', sub: 'Kyushu · JR Kyushu' }, { name: 'nimoca', color: '#3B6DB5', sub: 'Fukuoka' },
+    { name: 'Hayakaken', color: '#7CC4E8', sub: 'Fukuoka subway' }, { name: 'PiTaPa', color: '#A592D1', sub: 'Kansai' }] };
+  var IC_HINT = { JPY: 'Suica', KRW: 'T-money', TWD: 'EasyCard', HKD: 'Octopus', MOP: 'Macau Pass', SGD: 'EZ-Link', MYR: "Touch 'n Go", VND: 'Transit card' };
+  var SWATCHES = ['#3E9B4F', '#C8423B', '#E58BB0', '#3A8FD6', '#2F6FB8', '#F2C230', '#E8742E', '#7A55A3', '#7CC4E8', '#2B2B2B'];
+  var BOOK_TYPES = [
+    { id: 'Flight', bg: '#CFE0F4', fg: '#143E6E' }, { id: 'Hotel', bg: '#E0D6F3', fg: '#3A2366' }, { id: 'Train', bg: '#CDEBDD', fg: '#134733' },
+    { id: 'Tour', bg: '#F6D9BE', fg: '#6E3307' }, { id: 'Other', bg: '#E5DED3', fg: '#4A4038' }];
+  function bookType(id) { for (var i = 0; i < BOOK_TYPES.length; i++) if (BOOK_TYPES[i].id === id) return BOOK_TYPES[i]; return BOOK_TYPES[4]; }
 
   // ===================== dates =====================
   var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -89,14 +130,27 @@
     { id: 'Other', bg: '#E5DED3', fg: '#4A4038', bar: '#A39684' }
   ];
   function catOf(id) { for (var i = 0; i < CATS.length; i++) if (CATS[i].id === id) return CATS[i]; return CATS[4]; }
-  var METHOD_TEXT = { cash: 'Cash', card: 'Travel card', credit: 'Credit card', topup: 'Cash in', cardin: 'Card top-up', lost: 'Lost', adjust: 'Wallet recount' };
+  var METHOD_TEXT = { cash: 'Cash', card: 'Travel card', credit: 'Credit card', topup: 'Cash in', cardin: 'Card top-up', lost: 'Lost', adjust: 'Wallet recount', ic: 'IC card', icin: 'IC top-up', icfix: 'Balance fix' };
+  function methodText(T, e) {
+    var k = e.cardId ? cardOf(T, e.cardId) : null, n = k ? k.name : 'Card';
+    if (e.method === 'ic') return n;
+    if (e.method === 'icin') return n;
+    if (e.method === 'icfix') return 'Balance fix · ' + n;
+    return METHOD_TEXT[e.method] || '';
+  }
   var SRC_NAME = { ATM: 'ATM withdrawal', Exchange: 'Money exchange', Other: 'Other cash' };
 
   // ===================== storage =====================
   var KEY = 'travel-wallet-v1';
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
-  var DB0 = { v: 1, stage: 'welcome', trips: [], activeId: null, stash: {}, remind: { on: false, mins: 1260 }, pushOn: false, deviceId: null };
-  function load() { try { var raw = localStorage.getItem(KEY); if (raw) return Object.assign(clone(DB0), JSON.parse(raw)); } catch (e) { } return clone(DB0); }
+  var DB0 = { v: 1, stage: 'welcome', trips: [], activeId: null, stash: {}, remind: { on: false, mins: 1260 }, pushOn: false, deviceId: null, appearance: 'auto' };
+  function migrate(d) {
+    (d.trips || []).forEach(function (t) { t.cards = t.cards || []; t.bookings = t.bookings || []; if (t.card == null) t.card = 0; });
+    Object.keys(d.stash || {}).forEach(function (k) { d.stash[k].cards = d.stash[k].cards || []; });
+    if (!d.appearance) d.appearance = 'auto';
+    return d;
+  }
+  function load() { try { var raw = localStorage.getItem(KEY); if (raw) return migrate(Object.assign(clone(DB0), JSON.parse(raw))); } catch (e) { } return clone(DB0); }
   function uuid() { return (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); })); }
   var db = load();
   if (!db.deviceId) { db.deviceId = uuid(); persist(); }
@@ -105,22 +159,27 @@
   function activeTrip() { for (var i = 0; i < db.trips.length; i++) if (db.trips[i].id === db.activeId) return db.trips[i]; return null; }
 
   // ===================== UI state =====================
-  var DRAFT0 = { method: 'cash', digits: '', cat: 'Food', name: '', given: {}, got: null, err: '', editId: null, back: 'home' };
+  var DRAFT0 = { method: 'cash', cardId: null, digits: '', cat: 'Food', name: '', given: {}, got: null, err: '', editId: null, back: 'home' };
   var NT0 = { step: 'country', cur: null, name: '', start: null, days: 3, useStash: true, counts: {}, card: '', err: '' };
   var AC0 = { src: 'Exchange', counts: {}, err: '', back: 'home', editId: null };
   var SA0 = { step: 'country', cur: null, counts: {}, err: '', back: 'stash', fromOb: false, editing: false };
   var CT0 = { amount: '', err: '', editId: null };
   var RC0 = { counts: {}, step: 'count', reason: null, back: 'home', quick: false, err: '' };
+  var CA0 = { step: 'pick', name: '', color: '#3E9B4F', bal: '', err: '', editId: null, confirmRemove: false, back: 'home' };
+  var IT0 = { cardId: null, via: 'cash', counts: {}, amount: '', err: '', editId: null, back: 'home' };
+  var BK0 = { id: null, type: 'Flight', name: '', cur: 'THB', amount: '', paid: 'Credit card', date: '', err: '', confirmDel: false, back: 'summary' };
   var S = {
     view: db.stage === 'app' ? (activeTrip() ? 'home' : 'trips') : 'welcome', obStep: 1,
     draft: clone(DRAFT0), nt: clone(NT0), ac: clone(AC0), sa: clone(SA0), ct: clone(CT0), rc: clone(RC0), te: null,
+    ca: clone(CA0), it: clone(IT0), bk: clone(BK0), pastId: null,
     open: null, confirmDel: null, stashOpen: null, stashDel: null, confirmEnd: false,
-    coinSheet: null, csMode: 'menu', csQty: 1, settings: false, confirmReset: false, toast: '', pushMsg: '', pushBusy: false
+    coinSheet: null, csMode: 'menu', csQty: 1, cardSheet: null, tripMenu: null, delTrip: null, delMode: 'keep',
+    settings: false, confirmReset: false, toast: '', pushMsg: '', pushBusy: false
   };
   function set(o) { Object.assign(S, o); render(); }
   var toastTimer;
   function toast(msg) { S.toast = msg; render(); clearTimeout(toastTimer); toastTimer = setTimeout(function () { S.toast = ''; render(); }, 2600); }
-  function go(v) { return function () { set({ view: v, open: null, confirmDel: null, stashOpen: null, stashDel: null, confirmEnd: false, coinSheet: null, settings: false }); }; }
+  function go(v) { return function () { set({ view: v, open: null, confirmDel: null, stashOpen: null, stashDel: null, confirmEnd: false, coinSheet: null, cardSheet: null, tripMenu: null, delTrip: null, settings: false }); }; }
 
   // ===================== render plumbing =====================
   var root = document.getElementById('app');
@@ -146,7 +205,7 @@
   root.addEventListener('change', function (e) { var el = e.target.closest('[data-file]'); if (el && el.files && el.files[0]) restoreBackup(el.files[0]); });
 
   // ===================== icons & small parts =====================
-  var APP_VERSION = '1.1.0', APP_UPDATED = '29 Oct 2026';
+  var APP_VERSION = '1.2.0', APP_UPDATED = '1 Nov 2026';
   function LOGO(size) {
     return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 96 96" role="img" aria-label="Travel Wallet logo"><rect width="96" height="96" rx="22" fill="#1F6B52"/>' +
       '<circle cx="48" cy="48" r="28" fill="#E6CB76" stroke="#B8963A" stroke-width="4"/><circle cx="48" cy="48" r="21" fill="none" stroke="#B8963A" stroke-width="1.6" stroke-dasharray="2 3"/>' +
@@ -167,7 +226,13 @@
     list: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg>',
     chart: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 20V11M11 20V5M17 20v-6M3 20h18"/></svg>',
     box: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>',
-    plane: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 15l-3 6M14 15l3 6M3 9l18-6-6 18-3-8z"/></svg>',
+    plane: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 10h4a2 2 0 0 1 0 4h-4l-4 7h-3l2-7H7l-2 2H2l2-4-2-4h3l2 2h4L9 3h3z"/></svg>',
+    dots: '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+    flight: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 10h4a2 2 0 0 1 0 4h-4l-4 7h-3l2-7H7l-2 2H2l2-4-2-4h3l2 2h4L9 3h3z"/></svg>',
+    bed: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18V6M3 14h18v4M21 14v-2a3 3 0 0 0-3-3h-7v5"/><circle cx="7" cy="11" r="2"/></svg>',
+    train: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M9 21l1.5-4M15 21l-1.5-4"/><path d="M9 14h.01M15 14h.01"/></svg>',
+    ticket: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 0 0 4v0a2 2 0 0 1 0 4v2h18v-2a2 2 0 0 1 0-4 2 2 0 0 0 0-4V6H3z"/><path d="M13 6v12" stroke-dasharray="2 2"/></svg>',
+    tag: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V3h9l9 9-9 9z"/><path d="M7.5 7.5h.01"/></svg>',
     arrow: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>'
   };
   function backBtn(fn, label) { return '<button class="icon-btn" aria-label="' + (label || 'Back') + '"' + A(fn) + '>' + I.back + '</button>'; }
@@ -185,7 +250,12 @@
     if (S.view === 'newtrip') { if (S.nt.step === 'country') return picker('newtrip'); if (S.nt.step === 'details') return details(); return countScreen('newtrip'); }
     if (S.view === 'stashAdd') { if (S.sa.step === 'country') return picker('stash'); return countScreen('stash'); }
     if (S.view === 'stash') return stash(T);
+    if (S.view === 'past') { var P = tripById(S.pastId); if (P) return pastTrip(P); S.view = 'trips'; return trips(T); }
+    if (S.view === 'tripedit') { var E = S.te && tripById(S.te.tripId); if (E) return tripEdit(E); S.view = 'trips'; return trips(T); }
     if (!T) { S.view = 'trips'; return trips(null); }
+    if (S.view === 'cardadd') return cardAdd(T);
+    if (S.view === 'ictop') return icTop(T);
+    if (S.view === 'booking') return bookingScreen(T);
     if (S.view === 'addcash') return countScreen('addcash');
     if (S.view === 'pay') return pay(T);
     if (S.view === 'check') return checkScreen(T);
@@ -193,7 +263,6 @@
     if (S.view === 'cardtop') return cardTop(T);
     if (S.view === 'history') return historyScreen(T);
     if (S.view === 'summary') return summary(T);
-    if (S.view === 'tripedit') return tripEdit(T);
     return home(T);
   }
 
@@ -226,29 +295,34 @@
     if (!codes.length) return full ? '<div class="card small muted" style="line-height:1.5">Nothing here yet. Add leftover cash from an earlier trip, or end a trip to save what\'s left.</div>' : '<span class="small muted">Nothing saved yet. Cash left at the end of a trip lands here.</span>';
     return codes.map(function (code) {
       var St = db.stash[code], C = CURS[code], cash = total(St.counts, C);
-      if (!full) return '<div class="card row gap12" style="padding:12px 14px;border-radius:18px">' + flagBadge(C, 40, 22) + '<span class="col grow"><span class="bold">' + C.country + '</span><span class="xs muted">' + noteCount(St.counts, C) + ' notes · ' + coinsOf(St.counts, C) + ' coins' + (St.card ? ' · card ' + money(St.card, C) : '') + '</span></span><span class="bolder">' + money(cash, C) + '</span></div>';
+      if (!full) return '<div class="card row gap12" style="padding:12px 14px;border-radius:18px">' + flagBadge(C, 40, 22) + '<span class="col grow"><span class="bold">' + C.country + '</span><span class="xs muted">' + noteCount(St.counts, C) + (noteCount(St.counts, C) === 1 ? ' note · ' : ' notes · ') + coinsOf(St.counts, C) + (coinsOf(St.counts, C) === 1 ? ' coin' : ' coins') + (St.card ? ' · card ' + money(St.card, C) : '') + ((St.cards || []).length ? ' · ' + St.cards.length + (St.cards.length === 1 ? ' IC card' : ' IC cards') : '') + '</span></span><span class="bolder">' + money(cash, C) + '</span></div>';
       var open = S.stashOpen === code, conf = S.stashDel === code;
       return '<div class="card col gap12" style="border-radius:22px"><button class="entry-top"' + A(function () { set({ stashOpen: open ? null : code, stashDel: null }); }) + '>' + flagBadge(C, 44, 24) +
         '<span class="col grow"><span style="font-size:17px;font-weight:600">' + C.country + '</span><span class="xs muted">' + C.name + '</span></span><span style="font-size:18px;font-weight:700">' + money(cash, C) + '</span></button>' +
-        '<div class="wrap">' + chipsHtml(St.counts, C) + '</div>' + (St.card ? '<span class="small muted">Plus ' + money(St.card, C) + ' on the travel card</span>' : '') +
+        '<div class="wrap">' + chipsHtml(St.counts, C) + '</div>' + (St.card ? '<span class="small muted">Plus ' + money(St.card, C) + ' on the travel card</span>' : '') + ((St.cards || []).length ? '<div class="wrap">' + St.cards.map(function (k) { return '<span class="card-pill" style="background:' + k.color + ';color:' + onColor(k.color) + '">' + esc(k.name) + ' ' + money(k.bal, C) + '</span>'; }).join('') + '</div>' : '') +
         (open ? '<div class="entry-more" style="flex-direction:row;align-items:center;gap:8px">' + (conf ?
           '<span class="grow small bold">Remove this from your stash?</span><button class="btn-soft"' + A(function () { set({ stashDel: null }); }) + '>Keep</button><button class="btn-danger"' + A(function () { delete db.stash[code]; save(); set({ stashOpen: null, stashDel: null }); toast(C.country + ' removed from your stash'); }) + '>Remove</button>' :
           '<button class="btn-soft"' + A(function () { set({ view: 'stashAdd', sa: Object.assign(clone(SA0), { step: 'count', cur: code, counts: clone(St.counts), back: 'stash', editing: true }) }); }) + '>Recount</button><button class="btn-danger-soft"' + A(function () { set({ stashDel: code }); }) + '>Remove</button>') + '</div>' : '') + '</div>';
     }).join('');
   }
 
+  function tripDates(t) { return dateText(t.start) + ' – ' + dateText(addDays(t.start, t.days - 1)); }
+  function moreBtn(t, dark) { return '<button class="more-btn' + (dark ? ' on-dark' : '') + '" aria-label="More for ' + esc(t.name) + '"' + A(function () { set({ tripMenu: t.id }); }) + '>' + I.dots + '</button>'; }
   function trips(T) {
     var past = db.trips.filter(function (t) { return t.ended; });
     var out = '<div class="scroll with-nav"><div class="between" style="align-items:center"><div class="col"><span class="small muted">Travel wallet</span><span style="font-size:30px;font-weight:700">Trips</span></div><button class="icon-btn sm" aria-label="Settings"' + A(function () { set({ settings: true }); }) + '>' + I.sliders + '</button></div>';
     if (T) {
       var C = CURS[T.cur];
-      out += '<button class="dark col gap6" style="border-radius:24px;padding:18px;text-align:left;background:#3F322B;color:#F4EAD9"' + A(go('home')) + '><span class="small" style="color:#C9B8A5">Current trip</span><span style="font-size:22px;font-weight:700">' + esc(T.name) + '</span><span style="font-size:14px;color:#D8C9B6">' + C.flag.replace(/^/, '<span class="flag">') + '</span> ' + C.country + ' · ' + dateText(T.start) + ' – ' + dateText(addDays(T.start, T.days - 1)) + '</span><span class="bold" style="margin-top:4px">Open wallet · ' + money(total(T.wallet, C), C) + '</span></button>' +
-        '<button class="btn-soft" style="align-self:flex-start;margin-top:-6px;border:1.5px solid #CDBFAE;background:#FFFDF9;font-size:14px;min-height:42px"' + A(openTripEdit) + '>Edit trip details</button>';
+      out += '<div class="rel"><button class="dark col gap6" style="width:100%;border-radius:24px;padding:18px;text-align:left;background:#3F322B;color:#F4EAD9"' + A(go('home')) + '><span class="small" style="color:#C9B8A5">Current trip</span><span style="font-size:22px;font-weight:700;padding-right:44px">' + esc(T.name) + '</span><span style="font-size:14px;color:#D8C9B6"><span class="flag">' + C.flag + '</span> ' + C.country + ' · ' + tripDates(T) + '</span><span class="bold" style="margin-top:4px">Open wallet · ' + money(total(T.wallet, C), C) + '</span></button>' +
+        '<span style="position:absolute;top:12px;right:12px">' + moreBtn(T, true) + '</span></div>';
     } else {
       out += '<div class="card col gap10" style="border-radius:24px;padding:22px 18px;align-items:flex-start"><span style="font-size:22px;font-weight:700">Where to next?</span><span class="muted" style="line-height:1.5">Create a trip and pick the country. We\'ll load its notes and coins so you can track every one.</span><button class="btn btn-primary" style="padding:13px 20px;min-height:50px;font-size:16px"' + A(newTrip) + '>New trip</button></div>';
     }
     out += '<div class="col gap10"><div class="between"><h2 style="font-size:18px">Leftover stash</h2><button class="link"' + A(addLeftover) + '>Add leftovers</button></div>' + stashRowsHtml(false) + '</div>';
-    if (past.length) out += '<div class="col gap10"><h2 style="font-size:18px">Past trips</h2>' + past.map(function (t) { var C = CURS[t.cur], s = 0; t.expenses.forEach(function (e) { if (e.method === 'cash' || e.method === 'card' || e.method === 'credit') s += e.amount; }); return '<div class="card row gap12" style="padding:12px 14px;border-radius:18px">' + flagBadge(C, 40, 22) + '<span class="col grow"><span class="bold">' + esc(t.name) + '</span><span class="xs muted">' + dateText(t.start) + ' – ' + dateText(addDays(t.start, t.days - 1)) + '</span></span><span class="col" style="align-items:flex-end"><span class="bolder" style="font-size:14px">' + money(s, C) + '</span><span class="xs muted">spent</span></span></div>'; }).join('') + '</div>';
+    if (past.length) out += '<div class="col gap10"><h2 style="font-size:18px">Past trips</h2>' + past.map(function (t) {
+      var C = CURS[t.cur];
+      return '<div class="card row gap8" style="padding:10px 10px 10px 14px;border-radius:18px"><button class="row gap12 grow" style="text-align:left" aria-label="Open ' + esc(t.name) + '"' + A(function () { set({ view: 'past', pastId: t.id }); }) + '>' + flagBadge(C, 40, 22) + '<span class="col grow"><span class="bold ellipsis">' + esc(t.name) + '</span><span class="xs muted">' + tripDates(t) + '</span></span><span class="col" style="align-items:flex-end;flex:none"><span class="bolder" style="font-size:14px">' + money(spendTotal(t), C) + '</span><span class="xs muted">spent</span></span></button>' + moreBtn(t) + '</div>';
+    }).join('') + '</div>';
     return out + '</div>';
   }
   function newTrip() { set({ view: 'newtrip', nt: Object.assign(clone(NT0), { start: today() }) }); }
@@ -284,7 +358,10 @@
       dateFields(nt, setNt) + '<div class="grow"></div>' +
       '<button class="btn btn-primary"' + A(function () { if (!String(S.nt.name).trim()) { S.nt.name = C.country + ' trip'; } setNt({ step: 'money' }); }) + '>Next: money for the trip</button></div>';
   }
-  function openTripEdit() { var T = activeTrip(); if (!T) return; set({ view: 'tripedit', te: { name: T.name, start: T.start, days: T.days, rate: String(T.rate), err: '', back: S.view === 'tripedit' ? 'home' : S.view }, settings: false }); }
+  function openTripEdit(id) {
+    var T = (typeof id === 'number' || typeof id === 'string') ? tripById(id) : activeTrip(); if (!T) return;
+    set({ view: 'tripedit', te: { tripId: T.id, name: T.name, start: T.start, days: T.days, rate: String(T.rate), err: '', back: S.view === 'tripedit' ? 'home' : S.view }, settings: false, tripMenu: null });
+  }
   function tripEdit(T) {
     var C = CURS[T.cur], te = S.te;
     function setTe(o) { set({ te: Object.assign({}, S.te, { err: '' }, o) }); }
@@ -298,7 +375,8 @@
         var nm = String(S.te.name || '').trim(); if (!nm) { setTe({ err: 'Give the trip a name.' }); return; }
         var rate = parseFloat(String(S.te.rate).replace(/,/g, '')); if (!(rate > 0)) { setTe({ err: 'Enter an exchange rate above 0.' }); return; }
         T.name = nm; T.start = S.te.start; T.days = S.te.days; T.rate = rate; save(); set({ view: S.te.back || 'home' }); toast('Trip details saved');
-      }) + '>Save changes</button></div>';
+      }) + '>Save changes</button>' +
+      '<button class="btn" style="background:#F8DEDC;color:#7A1F1B;min-height:50px;font-size:16px"' + A(function () { set({ delTrip: T.id, delMode: 'keep' }); }) + '>Delete this trip</button></div>';
   }
 
   function countScreen(mode) {
@@ -329,7 +407,7 @@
       back = function () { if (S.sa.editing) set({ view: 'stash', sa: clone(SA0) }); else set({ sa: Object.assign({}, S.sa, { step: 'country', err: '' }) }); };
       saveFn = function () {
         var amt = total(counts, C); if (!amt) { set({ sa: Object.assign({}, S.sa, { err: 'Tap at least one note or coin.' }) }); return; }
-        db.stash[C.code] = { counts: counts, card: (db.stash[C.code] || {}).card || 0 }; save();
+        var prevS = db.stash[C.code] || {}; db.stash[C.code] = { counts: counts, card: prevS.card || 0, cards: prevS.cards || [] }; save();
         var fromOb = S.sa.fromOb; set({ view: fromOb ? 'trips' : (S.sa.back || 'stash'), sa: clone(SA0) });
         toast(money(amt, C) + ' saved to your ' + C.country + ' stash');
       };
@@ -362,7 +440,7 @@
     if (mode === 'addcash') out += '<div class="seg">' + ['Exchange', 'ATM', 'Other'].map(function (s) { return '<button class="' + (S.ac.src === s ? 'on' : '') + '"' + A(function () { set({ ac: Object.assign({}, S.ac, { src: s }) }); }) + '>' + s + '</button>'; }).join('') + '</div>';
     if (mode === 'newtrip' && db.stash[C.code]) {
       var r2 = db.stash[C.code], on = S.nt.useStash;
-      out += '<div class="row gap12" style="background:#CDEBDD;color:#134733;border-radius:18px;padding:14px"><span class="col grow gap4"><span class="bold">Bring ' + money(total(r2.counts, C), C) + ' from your stash</span><span class="small">' + esc(describe(r2.counts, C)) + (r2.card ? ' · plus ' + money(r2.card, C) + ' on the card' : '') + '</span></span><button aria-label="Bring stash into this trip" aria-pressed="' + on + '"' + A(function () { set({ nt: Object.assign({}, S.nt, { useStash: !on }) }); }) + '>' + sw(on) + '</button></div>';
+      out += '<div class="row gap12" style="background:#CDEBDD;color:#134733;border-radius:18px;padding:14px"><span class="col grow gap4"><span class="bold">Bring ' + money(total(r2.counts, C), C) + ' from your stash</span><span class="small">' + esc(describe(r2.counts, C)) + (r2.card ? ' · plus ' + money(r2.card, C) + ' on the travel card' : '') + ((r2.cards || []).length ? ' · ' + r2.cards.map(function (k) { return esc(k.name) + ' ' + money(k.bal, C); }).join(', ') : '') + '</span></span><button aria-label="Bring stash into this trip" aria-pressed="' + on + '"' + A(function () { set({ nt: Object.assign({}, S.nt, { useStash: !on }) }); }) + '>' + sw(on) + '</button></div>';
     }
     out += '<div class="panel"><div class="between" style="color:#E9DCCB;font-size:13px;font-weight:500"><span>' + esc(panelLabel) + '</span><span>Tap to add · minus to remove</span></div>' +
       '<div class="grid2" style="gap:12px 10px">' + notesHtml + '</div>' +
@@ -380,7 +458,8 @@
     if (total(nt.counts, C)) exps.push({ id: ts + 1, ts: ts, name: 'Money exchange', cat: 'Other', method: 'topup', amount: total(nt.counts, C), given: {}, got: nt.counts });
     if (useS && total(rec.counts, C)) exps.push({ id: ts + 2, ts: ts, name: 'From your stash', cat: 'Other', method: 'topup', amount: total(rec.counts, C), given: {}, got: rec.counts });
     if (useS) delete db.stash[C.code];
-    var t = { id: ts, name: String(nt.name || '').trim() || C.country + ' trip', cur: C.code, start: nt.start || today(), days: nt.days, rate: C.rate, wallet: wallet, card: card, expenses: exps, ended: false, checkedDate: '' };
+    var cards = useS ? (rec.cards || []).map(function (k) { return Object.assign({}, k, { id: uuid() }); }) : [];
+    var t = { id: ts, name: String(nt.name || '').trim() || C.country + ' trip', cur: C.code, start: nt.start || today(), days: nt.days, rate: C.rate, wallet: wallet, card: card, cards: cards, bookings: [], expenses: exps, ended: false, checkedDate: '' };
     db.trips.unshift(t); db.activeId = t.id; save();
     set({ view: 'home', nt: clone(NT0) });
     toast('Trip started. Have a great time in ' + C.country);
@@ -403,44 +482,48 @@
   function openPay() { set({ view: 'pay', draft: Object.assign(clone(DRAFT0), { back: S.view === 'pay' ? 'home' : S.view }), open: null, confirmDel: null }); }
   function openAddCash() { set({ view: 'addcash', ac: Object.assign(clone(AC0), { back: S.view }), coinSheet: null }); }
 
-  function entryRows(T, list) {
-    var C = CURS[T.cur], w = T.wallet;
+  function entryRows(T, list, readOnly) {
+    var C = CURS[T.cur];
     return list.map(function (e) {
-      var cat = catOf(e.cat), cash = e.method === 'cash';
+      var cat = catOf(e.cat), cash = e.method === 'cash', k = e.cardId ? cardOf(T, e.cardId) : null, kName = k ? k.name : 'the card';
       var net = e.method === 'adjust' ? total(e.got, C) - total(e.given, C) : 0;
-      var plus = e.method === 'topup' || e.method === 'cardin' || (e.method === 'adjust' && net > 0);
-      var initial = plus ? '+' : (e.method === 'lost' ? '!' : (e.method === 'adjust' ? '=' : e.cat.charAt(0)));
+      var plus = e.method === 'topup' || e.method === 'cardin' || e.method === 'icin' || (e.method === 'icfix' && e.amount > 0) || (e.method === 'adjust' && net > 0);
+      var initial = plus ? '+' : (e.method === 'lost' ? '!' : ((e.method === 'adjust' || e.method === 'icfix') ? '=' : e.cat.charAt(0)));
       var detail;
       if (cash) detail = 'Gave ' + describe(e.given, C) + '. Got back ' + (total(e.got, C) ? describe(e.got, C) : 'nothing') + '.';
       else if (e.method === 'topup') detail = 'Received ' + describe(e.got, C) + '.';
       else if (e.method === 'cardin') detail = 'Added to your travel card.';
+      else if (e.method === 'icin') detail = (e.via === 'credit' ? 'Topped up ' + kName + ' with a credit card. No cash moved.' : 'Put ' + describe(e.given, C) + ' into ' + kName + '.') + ' Not counted as spending.';
+      else if (e.method === 'icfix') detail = 'Balance fix on ' + kName + '. Not counted as spending.';
+      else if (e.method === 'ic') detail = 'Paid with ' + kName + '. No cash moved.';
       else if (e.method === 'lost') detail = 'Missing: ' + describe(e.given, C) + (total(e.got, C) ? ' (and found ' + describe(e.got, C) + ')' : '') + '. Not counted as spending. Delete it if this was a mistake.';
       else if (e.method === 'adjust') detail = 'Recount fix. ' + (total(e.given, C) ? 'Removed ' + describe(e.given, C) + '. ' : '') + (total(e.got, C) ? 'Added ' + describe(e.got, C) + '. ' : '') + 'Delete it and recount if this was a mistake.';
       else detail = 'Paid by ' + METHOD_TEXT[e.method].toLowerCase() + '. No cash moved.';
-      var bg = plus ? '#CDEBDD' : (e.method === 'lost' ? '#F8DEDC' : (e.method === 'adjust' ? '#E5DED3' : cat.bg));
-      var fg = plus ? '#134733' : (e.method === 'lost' ? '#7A1F1B' : (e.method === 'adjust' ? '#4A4038' : cat.fg));
-      var amt = e.method === 'adjust' ? Math.abs(net) : e.amount;
+      var bg = plus ? '#CDEBDD' : (e.method === 'lost' ? '#F8DEDC' : ((e.method === 'adjust' || e.method === 'icfix') ? '#E5DED3' : cat.bg));
+      var fg = plus ? '#134733' : (e.method === 'lost' ? '#7A1F1B' : ((e.method === 'adjust' || e.method === 'icfix') ? '#4A4038' : cat.fg));
+      var amt = e.method === 'adjust' ? Math.abs(net) : Math.abs(e.amount);
       var amountText = (e.method === 'adjust' && net === 0) ? money(0, C) : (plus ? '+' : '-') + money(amt, C);
-      var open = S.open === e.id, conf = S.confirmDel === e.id, canEdit = e.method !== 'adjust' && e.method !== 'lost';
+      var open = S.open === e.id, conf = S.confirmDel === e.id, canEdit = !readOnly && e.method !== 'adjust' && e.method !== 'lost' && e.method !== 'icfix';
       var more = '';
       if (open) {
-        more = '<div class="entry-more"><span class="small" style="color:#4A4038;line-height:1.5">' + esc(detail) + '</span>' + (conf ?
+        more = '<div class="entry-more"><span class="small" style="color:#4A4038;line-height:1.5">' + esc(detail) + '</span>' + (readOnly ? '' : (conf ?
           '<div class="row gap8"><span class="grow small bold">Delete this? Your wallet goes back to how it was.</span><button class="btn-soft"' + A(function () { set({ confirmDel: null }); }) + '>Keep</button><button class="btn-danger"' + A(function () {
-            var r = applyE(T.wallet, T.card, e, -1, C);
-            if (!okW(r.w, r.c, C)) { set({ confirmDel: null }); toast("Can't delete. Some of that money is already spent"); return; }
-            T.wallet = r.w; T.card = r.c; T.expenses = T.expenses.filter(function (x) { return x.id !== e.id; }); save(); set({ open: null, confirmDel: null }); toast('Deleted. Wallet put back');
+            if (!commitE(T, e, null)) { set({ confirmDel: null }); toast("Can't delete. Some of that money is already spent"); return; }
+            set({ open: null, confirmDel: null }); toast('Deleted. Wallet put back');
           }) + '>Delete</button></div>' :
-          '<div class="row gap8">' + (canEdit ? '<button class="btn-soft"' + A(function () { openEdit(T, e); }) + '>Edit</button>' : '') + '<button class="btn-danger-soft"' + A(function () { set({ confirmDel: e.id }); }) + '>Delete</button></div>') + '</div>';
+          '<div class="row gap8">' + (canEdit ? '<button class="btn-soft"' + A(function () { openEdit(T, e); }) + '>Edit</button>' : '') + '<button class="btn-danger-soft"' + A(function () { set({ confirmDel: e.id }); }) + '>Delete</button></div>')) + '</div>';
       }
+      var dot = k ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + k.color + ';margin-right:4px"></span>' : '';
       return '<div class="entry"><button class="entry-top"' + A(function () { set({ open: open ? null : e.id, confirmDel: null }); }) + '><span class="entry-ic" style="background:' + bg + ';color:' + fg + '">' + initial + '</span>' +
-        '<span class="col grow"><span class="bold ellipsis">' + esc(e.name) + '</span><span class="xs muted">' + METHOD_TEXT[e.method] + ' · ' + whenText(e.ts) + '</span></span><span class="bolder" style="color:' + (plus ? '#1F6B52' : (e.method === 'lost' ? '#7A1F1B' : '#2B211C')) + ';flex:none">' + amountText + '</span></button>' + more + '</div>';
+        '<span class="col grow"><span class="bold ellipsis">' + esc(e.name) + '</span><span class="xs muted">' + dot + esc(methodText(T, e)) + ' · ' + whenText(e.ts) + '</span></span><span class="bolder" style="color:' + (plus ? '#1F6B52' : (e.method === 'lost' ? '#7A1F1B' : '#2B211C')) + ';flex:none">' + amountText + '</span></button>' + more + '</div>';
     }).join('');
   }
   function openEdit(T, e) {
     var C = CURS[T.cur];
-    if (e.method === 'cash' || e.method === 'card' || e.method === 'credit') set({ view: 'pay', draft: Object.assign(clone(DRAFT0), { method: e.method, digits: String(e.amount), cat: e.cat, name: e.name === e.cat ? '' : e.name, given: clone(e.given), got: e.method === 'cash' ? clone(e.got) : null, editId: e.id, back: S.view }), open: null });
+    if (e.method === 'cash' || e.method === 'card' || e.method === 'credit' || e.method === 'ic') set({ view: 'pay', draft: Object.assign(clone(DRAFT0), { method: e.method, cardId: e.cardId || null, digits: String(e.amount), cat: e.cat, name: e.name === e.cat ? '' : e.name, given: clone(e.given), got: e.method === 'cash' ? clone(e.got) : null, editId: e.id, back: S.view }), open: null, cardSheet: null });
     else if (e.method === 'topup') { var src = 'Other'; Object.keys(SRC_NAME).forEach(function (k) { if (SRC_NAME[k] === e.name) src = k; }); set({ view: 'addcash', ac: Object.assign(clone(AC0), { src: src, counts: clone(e.got), editId: e.id, back: S.view }), open: null }); }
-    else if (e.method === 'cardin') set({ view: 'cardtop', ct: Object.assign(clone(CT0), { amount: String(e.amount / C.minor), editId: e.id }), open: null });
+    else if (e.method === 'cardin') set({ view: 'cardtop', ct: Object.assign(clone(CT0), { amount: String(e.amount / C.minor), editId: e.id }), open: null, cardSheet: null });
+    else if (e.method === 'icin') set({ view: 'ictop', it: Object.assign(clone(IT0), { cardId: e.cardId, via: e.via || 'cash', counts: clone(e.given || {}), amount: String(e.amount / C.minor), editId: e.id, back: S.view }), open: null, cardSheet: null });
   }
 
   function home(T) {
@@ -452,7 +535,7 @@
     }).join('');
     var coins = C.coins.map(function (n) {
       var c = w[n.id] || 0;
-      return '<button style="position:relative;width:54px;height:54px;border-radius:50%;background:' + n.bg + ';border:' + n.bw + ' solid ' + n.edge + ';color:' + n.fg + ';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;opacity:' + (c ? 1 : 0.4) + '" aria-label="' + esc(n.label) + ' options"' + A(function () { set({ coinSheet: n.id, csMode: 'menu', csQty: 1 }); }) + '>' + esc(n.short) +
+      return '<button style="position:relative;width:54px;height:54px;border-radius:50%;background:' + n.bg + ';border:' + n.bw + ' solid ' + n.edge + ';color:' + n.fg + ';display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px" class="' + (c ? '' : 'coin-zero') + '" aria-label="' + esc(n.label) + ' options"' + A(function () { set({ coinSheet: n.id, csMode: 'menu', csQty: 1 }); }) + '>' + esc(n.short) +
         '<span style="position:absolute;top:-6px;right:-8px;background:#2B211C;color:#fff;border-radius:999px;font-size:12px;font-weight:700;padding:1px 7px">' + c + '</span></button>';
     }).join('');
     var showCheck = ns.nightNow && !ns.checked;
@@ -465,7 +548,10 @@
       '<div class="row gap8" style="flex:none"><button class="icon-btn sm" aria-label="Settings"' + A(function () { set({ settings: true }); }) + '>' + I.sliders + '</button>' +
       '<span aria-label="Currency ' + C.code + '" style="width:40px;height:40px;background:' + C.badgeBg + ';color:' + C.badgeFg + ';border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:none"><span class="flag" style="font-size:16px">' + C.flag + '</span><span style="font-size:10px;font-weight:700;line-height:1">' + C.code + '</span></span></div></div>' +
       '<div class="dark col gap12" style="border-radius:26px;padding:20px"><span style="font-size:14px;color:#C9B8A5;font-weight:500">Cash in your wallet</span><span style="font-size:40px;font-weight:700;line-height:1;letter-spacing:-0.5px">' + money(cashSum, C) + '</span>' +
-      '<div class="wrap" style="gap:8px"><span style="background:#57473E;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600">Travel card ' + money(T.card, C) + '</span>' + (C.coins.length ? '<span style="background:#E6CB76;color:#4A3806;border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600">' + cc + ' coins · ' + money(coinValue(w, C), C) + '</span>' : '') + '</div></div>' +
+      '<div class="wrap" style="gap:8px"><button class="card-pill" style="background:#57473E;color:#F4EAD9"' + A(function () { set({ cardSheet: 'travel' }); }) + '>Travel card ' + money(T.card, C) + '</button>' +
+        T.cards.map(function (k) { return '<button class="card-pill" style="background:' + k.color + ';color:' + onColor(k.color) + '"' + A(function () { set({ cardSheet: k.id }); }) + '>' + esc(k.name) + ' ' + money(k.bal, C) + '</button>'; }).join('') +
+        (C.coins.length ? '<span class="card-pill" style="background:#E6CB76;color:#4A3806">' + cc + (cc === 1 ? ' coin · ' : ' coins · ') + money(coinValue(w, C), C) + '</span>' : '') +
+        '<button class="card-pill card-add" aria-label="Add a transit card"' + A(function () { openCardAdd(); }) + '>+ Card</button></div></div>' +
       (cashSum === 0 ? '<div class="card col gap10" style="align-items:flex-start"><span class="bold">No cash recorded yet</span><span class="muted" style="font-size:14px;line-height:1.5">Exchanged money or took some out of an ATM? Add it so the app knows exactly which notes and coins you have.</span><button class="btn btn-primary" style="padding:11px 16px;min-height:46px;font-size:15px"' + A(openAddCash) + '>Add cash</button></div>' : '') +
       '<div class="col gap10"><div class="between"><h2>Notes</h2><span class="small muted">' + noteCount(w, C) + ' notes · ' + money(cashSum - coinValue(w, C), C) + '</span></div><div class="grid2">' + notes + '</div></div>' +
       (C.coins.length ? '<div class="col gap12"><div class="between"><h2>Coins</h2><span class="small muted">' + money(coinValue(w, C), C) + '</span></div><div class="wrap" style="gap:16px 14px;padding:4px 4px 0">' + coins + '</div></div>' : '') +
@@ -486,10 +572,26 @@
       '<button class="link" style="align-self:center;font-size:13px"' + A(function () { set({ settings: true }); }) + '>' + (db.remind.on ? 'Reminder at ' + hhmm(db.remind.mins) : 'Reminder off') + ' · Change</button></div>';
   }
 
+  function payMethods(T, d, base, setDraft) {
+    var C = CURS[T.cur];
+    if (!base.k.length) return '<div class="seg">' + [['cash', 'Cash'], ['card', 'Travel card'], ['credit', 'Credit card']].map(function (m) { return '<button class="' + (d.method === m[0] ? 'on' : '') + '"' + A(function () { setDraft({ method: m[0], cardId: null, got: null }); }) + '>' + m[1] + '</button>'; }).join('') + '</div>';
+    var opts = [{ m: 'cash', label: 'Cash' }, { m: 'card', label: 'Travel card' }];
+    base.k.forEach(function (k) { opts.push({ m: 'ic', id: k.id, label: k.name + ' · ' + money(k.bal, C), color: k.color }); });
+    opts.push({ m: 'credit', label: 'Credit card' });
+    return '<div class="grid2" style="gap:6px">' + opts.map(function (o) {
+      var on = d.method === o.m && (o.m !== 'ic' || d.cardId === o.id);
+      var style = o.color ? (on ? 'background:' + o.color + ';border-color:' + o.color + ';color:' + onColor(o.color) : 'border-color:' + o.color) : '';
+      return '<button class="method-btn' + (on && !o.color ? ' on' : '') + '" style="' + style + '"' + A(function () { setDraft({ method: o.m, cardId: o.id || null, got: null }); }) + '>' + (o.color && !on ? '<span style="width:10px;height:10px;border-radius:3px;background:' + o.color + ';flex:none"></span>' : '') + '<span class="ellipsis">' + esc(o.label) + '</span></button>';
+    }).join('') + '</div>';
+  }
   function pay(T) {
     var C = CURS[T.cur], d = S.draft, editE = null;
     if (d.editId) T.expenses.forEach(function (e) { if (e.id === d.editId) editE = e; });
-    var base = editE ? applyE(T.wallet, T.card, editE, -1, C) : { w: T.wallet, c: T.card }, bw = base.w;
+    var base = editE ? applyAll(T, editE, null, C) : { w: T.wallet, c: T.card, k: T.cards };
+    if (!base) base = { w: T.wallet, c: T.card, k: T.cards };
+    var bw = base.w, icCard = null;
+    if (d.method === 'ic') base.k.forEach(function (k) { if (k.id === d.cardId) icCard = k; });
+    if (d.method === 'ic' && !icCard) { d.method = 'cash'; }
     var price = parseInt(d.digits || '0', 10), isCash = d.method === 'cash';
     var due = isCash && C.round > 1 ? Math.round(price / C.round) * C.round : price;
     var givenSum = total(d.given, C), changeDue = isCash ? Math.max(0, givenSum - due) : 0;
@@ -499,18 +601,20 @@
       if (!price) { setDraft({ err: 'Enter an amount first.' }); return; }
       if (isCash && givenSum < due) { setDraft({ err: 'Tap the notes or coins you handed over. You need at least ' + money(due, C) + '.' }); return; }
       if (d.method === 'card' && price > base.c) { setDraft({ err: 'Your travel card only has ' + money(base.c, C) + '. Top it up or pay another way.' }); return; }
+      if (icCard && price > icCard.bal) { setDraft({ err: icCard.name + ' only has ' + money(icCard.bal, C) + '. Top it up or pay another way.' }); return; }
       var e = { id: editE ? editE.id : Date.now(), ts: editE ? editE.ts : Date.now(), name: String(S.draft.name || '').trim() || d.cat, cat: d.cat, method: d.method, amount: due, given: isCash ? d.given : {}, got: isCash ? got : {} };
-      var r = applyE(bw, base.c, e, 1, C);
-      if (!okW(r.w, r.c, C)) { setDraft({ err: "That doesn't fit what's in your wallet. Check the notes and coins." }); return; }
-      T.wallet = r.w; T.card = r.c; T.expenses = editE ? T.expenses.map(function (x) { return x.id === editE.id ? e : x; }) : [e].concat(T.expenses);
-      save(); set({ view: d.back || 'home', draft: clone(DRAFT0), open: null });
+      if (icCard) e.cardId = icCard.id;
+      if (!commitE(T, editE, e)) { setDraft({ err: "That doesn't fit what's in your wallet. Check the notes and coins." }); return; }
+      set({ view: d.back || 'home', draft: clone(DRAFT0), open: null });
       toast(editE ? 'Updated. Your wallet is fixed' : (isCash ? 'Saved. Your wallet is updated' : 'Saved'));
     }
     var out = '<div class="scroll"><div class="row gap12"><button class="icon-btn" aria-label="Close"' + A(function () { set({ view: d.back || 'home', draft: clone(DRAFT0) }); }) + '>' + I.close + '</button><span style="font-size:20px;font-weight:700">' + (editE ? 'Edit entry' : 'New expense') + '</span></div>' +
-      '<div class="seg">' + [['cash', 'Cash'], ['card', 'Travel card'], ['credit', 'Credit card']].map(function (m) { return '<button class="' + (d.method === m[0] ? 'on' : '') + '"' + A(function () { setDraft({ method: m[0], got: null }); }) + '>' + m[1] + '</button>'; }).join('') + '</div>' +
+      payMethods(T, d, base, setDraft) +
       '<div class="card col gap12" style="border-radius:22px"><div class="row" style="justify-content:center;align-items:baseline;gap:8px"><span style="font-size:20px;font-weight:600;color:#75675C">' + esc((C.pre || C.post).trim()) + '</span><span style="font-size:42px;font-weight:700">' + (price / C.minor).toLocaleString('en-US', { minimumFractionDigits: C.dec, maximumFractionDigits: C.dec }) + '</span></div>' +
       (isCash && C.round > 1 && price % C.round !== 0 ? '<span class="small bold" style="text-align:center;color:#5E4306">Cash total rounds to ' + money(due, C) + '</span>' : '') +
       '<div class="keypad">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0', '⌫'].map(function (k) { return '<button aria-label="' + (k === '⌫' ? 'Delete' : k) + '"' + A(function () { var s = S.draft.digits; if (k === '⌫') s = s.slice(0, -1); else if (s.length < 10) s = (s + k).replace(/^0+/, ''); setDraft({ digits: s, got: null }); }) + '>' + k + '</button>'; }).join('') + '</div></div>' +
+      (icCard && price ? '<div class="note-box ' + (price > icCard.bal ? 'note-bad' : 'note-ok') + ' small bold row" style="gap:8px"><span style="width:12px;height:12px;border-radius:3px;background:' + icCard.color + ';flex:none"></span>' + esc(icCard.name) + ' ' + money(icCard.bal, C) + ' → ' + money(icCard.bal - price, C) + '</div>' : '') +
+      (d.method === 'card' && price ? '<div class="note-box ' + (price > base.c ? 'note-bad' : 'note-ok') + ' small bold">Travel card ' + money(base.c, C) + ' → ' + money(base.c - price, C) + '</div>' : '') +
       '<div class="col gap10"><span class="bold">What was it?</span><div class="wrap">' + CATS.map(function (c) { var on = d.cat === c.id; return '<button class="pill" style="border-color:' + (on ? c.fg : '#DDD0BF') + ';background:' + (on ? c.bg : '#FFFDF9') + ';color:' + (on ? c.fg : '#4A4038') + '"' + A(function () { setDraft({ cat: c.id }); }) + '>' + c.id + '</button>'; }).join('') + '</div>' +
       '<label class="field" style="font-size:13px">Name (optional)<input placeholder="Ramen" value="' + esc(d.name) + '"' + inp('payName', function (v) { S.draft.name = v; }) + '></label></div>';
     if (isCash) {
@@ -604,29 +708,203 @@
       (T.expenses.length ? entryRows(T, T.expenses) : '<span class="muted" style="font-size:14px">Nothing logged yet. Tap + to add your first expense.</span>') + '</div>';
   }
 
-  function summary(T) {
-    var C = CURS[T.cur], w = T.wallet, tot = 0, byM = { cash: 0, card: 0, credit: 0 }, byC = {}, lostT = 0, foundT = 0;
+  // ---------- summary (current and past trips) ----------
+  function moneyLeftText(T) {
+    var C = CURS[T.cur], parts = [money(total(T.wallet, C), C) + ' cash'];
+    if (T.card) parts.push(money(T.card, C) + ' on the travel card');
+    T.cards.forEach(function (k) { if (k.bal) parts.push(money(k.bal, C) + ' on ' + k.name); });
+    return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0];
+  }
+  function stashLeftovers(T) {
+    var C = CURS[T.cur], prev = db.stash[T.cur] || { counts: {}, card: 0, cards: [] };
+    var cards = clone(prev.cards || []);
+    T.cards.forEach(function (k) {
+      var same = null; cards.forEach(function (x) { if (x.name.toLowerCase() === k.name.toLowerCase()) same = x; });
+      if (same) same.bal += k.bal; else cards.push({ id: k.id, name: k.name, color: k.color, bal: k.bal });
+    });
+    var rec = { counts: merge(prev.counts, T.wallet, 1, C), card: (prev.card || 0) + T.card, cards: cards };
+    if (total(rec.counts, C) || rec.card || rec.cards.length) db.stash[T.cur] = rec;
+  }
+  function deleteTrip(T, keepMoney) {
+    var C = CURS[T.cur], wasActive = db.activeId === T.id;
+    if (wasActive && keepMoney) stashLeftovers(T);
+    db.trips = db.trips.filter(function (t) { return t.id !== T.id; });
+    if (wasActive) db.activeId = null;
+    save(); set({ view: 'trips', delTrip: null, tripMenu: null, pastId: null, te: null });
+    toast(T.name + ' deleted' + (wasActive && keepMoney ? '. Money kept in your ' + C.country + ' stash' : ''));
+  }
+  function summaryBody(T, past) {
+    var C = CURS[T.cur], tot = 0, byM = { cash: 0, card: 0, credit: 0 }, byK = {}, byC = {}, lostT = 0, foundT = 0;
     T.expenses.forEach(function (e) {
-      if (e.method === 'cash' || e.method === 'card' || e.method === 'credit') { tot += e.amount; byM[e.method] += e.amount; byC[e.cat] = (byC[e.cat] || 0) + e.amount; }
+      if (isSpend(e.method)) { tot += e.amount; if (e.method === 'ic') byK[e.cardId] = (byK[e.cardId] || 0) + e.amount; else byM[e.method] += e.amount; byC[e.cat] = (byC[e.cat] || 0) + e.amount; }
       if (e.method === 'lost') lostT += e.amount;
       if (e.method === 'adjust') { var n = total(e.got, C) - total(e.given, C); if (n < 0) lostT += -n; else foundT += n; }
     });
     var maxC = 1; Object.keys(byC).forEach(function (k) { if (byC[k] > maxC) maxC = byC[k]; });
-    var cc = coinsOf(w, C), cash = money(total(w, C), C), card = money(T.card, C);
+    var before = 0; T.bookings.forEach(function (b) { before += bookingBaht(b, T); });
+    var during = tot / C.minor * T.rate;
     var rateText = '฿' + (T.rate < 0.01 ? T.rate.toFixed(4) : T.rate) + ' per ' + C.unit;
-    return '<div class="scroll with-nav"><div class="col"><span class="small muted">' + C.country + ' · ' + dateText(T.start) + ' – ' + dateText(addDays(T.start, T.days - 1)) + '</span><span style="font-size:28px;font-weight:700">Trip summary</span></div>' +
-      '<div class="dark col gap6" style="border-radius:24px;padding:20px"><span style="font-size:14px;color:#C9B8A5">You spent</span><span style="font-size:38px;font-weight:700;line-height:1.05">' + money(tot, C) + '</span><span style="font-size:14px;color:#D8C9B6">About ฿' + Math.round(tot / C.minor * T.rate).toLocaleString('en-US') + ' at ' + rateText + '</span><button class="link" style="align-self:flex-start;color:#F2D27A;font-size:13px"' + A(openTripEdit) + '>Change rate</button></div>' +
-      '<div class="grid3">' + [['Cash', byM.cash], ['Travel card', byM.card], ['Credit card', byM.credit]].map(function (x) { return '<div class="card col gap4" style="padding:12px;border-radius:16px"><span class="xs muted">' + x[0] + '</span><span class="bolder" style="font-size:15px">' + money(x[1], C) + '</span></div>'; }).join('') + '</div>' +
-      (lostT || foundT ? '<div class="card col gap8"><span class="bold">Not counted as spending</span>' + (lostT ? '<div class="between" style="font-size:14px"><span>Lost or missing</span><span class="bolder" style="color:#7A1F1B">' + money(lostT, C) + '</span></div>' : '') + (foundT ? '<div class="between" style="font-size:14px"><span>Found</span><span class="bolder" style="color:#1F6B52">' + money(foundT, C) + '</span></div>' : '') + '</div>' : '') +
-      (Object.keys(byC).length ? '<div class="card col gap12"><span class="bold">By category</span>' + CATS.filter(function (c) { return byC[c.id]; }).map(function (c) { return '<div class="col gap6"><div class="between" style="font-size:14px"><span>' + c.id + '</span><span class="bold">' + money(byC[c.id], C) + '</span></div><div class="bar-bg"><div class="bar" style="width:' + Math.round(byC[c.id] / maxC * 100) + '%;background:' + c.bar + '"></div></div></div>'; }).join('') + '</div>' : '') +
-      '<div class="card col gap10"><div class="between"><span class="bold">What\'s left</span><span class="bolder">' + cash + '</span></div><div class="wrap">' + chipsHtml(w, C) + '</div><span class="small muted">Plus ' + card + ' on the travel card</span></div>' +
+    var tiles = [['Cash', byM.cash, null], ['Travel card', byM.card, null]];
+    T.cards.forEach(function (k) { tiles.push([k.name, byK[k.id] || 0, k.color]); });
+    tiles.push(['Credit card', byM.credit, null]);
+    var out = '<div class="dark col gap10" style="border-radius:24px;padding:20px"><span style="font-size:14px;color:#C9B8A5">Whole trip</span><span style="font-size:38px;font-weight:700;line-height:1.05">' + thb(before + during) + '</span>' +
+      '<div class="col gap6" style="border-top:1px solid #57473E;padding-top:10px;font-size:14px"><div class="between"><span style="color:#D8C9B6">Before the trip</span><span class="bold">' + thb(before) + '</span></div>' +
+      '<div class="between"><span style="color:#D8C9B6">During the trip · ' + money(tot, C) + '</span><span class="bold">≈ ' + thb(during) + '</span></div></div>' +
+      '<div class="row" style="justify-content:space-between"><span class="xs" style="color:#C9B8A5">At ' + rateText + '</span>' + (past ? '' : '<button class="link" style="color:#F2D27A;font-size:13px;padding:2px 0"' + A(openTripEdit) + '>Change rate</button>') + '</div></div>';
+    out += '<div class="col gap10"><div class="between" style="align-items:center"><h2>Before the trip</h2>' + (past ? '' : '<button class="btn-soft" style="background:#FFFDF9;border:1.5px solid #CDBFAE"' + A(function () { openBooking(null); }) + '>+ Add</button>') + '</div>' +
+      (T.bookings.length ? '<div class="card col" style="padding:4px 14px">' + T.bookings.map(function (b, i) {
+        var bt = bookType(b.type), icon = { Flight: I.flight, Hotel: I.bed, Train: I.train, Tour: I.ticket }[b.type] || I.tag;
+        var inner = '<span class="entry-ic" style="background:' + bt.bg + ';color:' + bt.fg + '">' + icon + '</span><span class="col grow"><span class="bold ellipsis">' + esc(b.name) + '</span><span class="xs muted">' + b.type + ' · ' + esc(b.paid) + (b.date ? ' · ' + dateText(b.date) : '') + '</span></span>' +
+          '<span class="col" style="align-items:flex-end;flex:none"><span class="bolder">' + bookingText(b, T) + '</span>' + (b.cur === 'THB' ? '' : '<span class="xs muted">≈ ' + thb(bookingBaht(b, T)) + '</span>') + '</span>';
+        var st = 'padding:10px 0;' + (i ? 'border-top:1px solid #EDE4D8;' : '');
+        return past ? '<div class="row gap12" style="' + st + '">' + inner + '</div>' : '<button class="row gap12" style="' + st + 'text-align:left;width:100%"' + A(function () { openBooking(b); }) + '>' + inner + '</button>';
+      }).join('') + '</div>' : '<div class="card small muted" style="line-height:1.5">' + (past ? 'No bookings were added for this trip.' : 'Flights, hotels or passes you paid before leaving. Add them to see what the whole trip cost.') + '</div>') + '</div>';
+    out += '<div class="grid3">' + tiles.map(function (x) { return '<div class="card col gap4" style="padding:12px;border-radius:16px;min-width:0"><span class="xs muted row" style="gap:5px">' + (x[2] ? '<span style="width:8px;height:8px;border-radius:50%;background:' + x[2] + ';flex:none"></span>' : '') + '<span class="ellipsis">' + esc(x[0]) + '</span></span><span class="bolder" style="font-size:15px">' + money(x[1], C) + '</span></div>'; }).join('') + '</div>';
+    if (lostT || foundT) out += '<div class="card col gap8"><span class="bold">Not counted as spending</span>' + (lostT ? '<div class="between" style="font-size:14px"><span>Lost or missing</span><span class="bolder" style="color:#7A1F1B">' + money(lostT, C) + '</span></div>' : '') + (foundT ? '<div class="between" style="font-size:14px"><span>Found</span><span class="bolder" style="color:#1F6B52">' + money(foundT, C) + '</span></div>' : '') + '</div>';
+    if (Object.keys(byC).length) out += '<div class="card col gap12"><span class="bold">By category</span>' + CATS.filter(function (c) { return byC[c.id]; }).map(function (c) { return '<div class="col gap6"><div class="between" style="font-size:14px"><span>' + c.id + '</span><span class="bold">' + money(byC[c.id], C) + '</span></div><div class="bar-bg"><div class="bar" style="width:' + Math.round(byC[c.id] / maxC * 100) + '%;background:' + c.bar + '"></div></div></div>'; }).join('') + '</div>';
+    return out;
+  }
+  function summary(T) {
+    var C = CURS[T.cur], w = T.wallet, cc = coinsOf(w, C), cash = money(total(w, C), C);
+    return '<div class="scroll with-nav"><div class="col"><span class="small muted">' + C.country + ' · ' + tripDates(T) + '</span><span style="font-size:28px;font-weight:700">Trip summary</span></div>' +
+      summaryBody(T, false) +
+      '<div class="card col gap10"><div class="between"><span class="bold">What\'s left</span><span class="bolder">' + cash + '</span></div><div class="wrap">' + chipsHtml(w, C) + '</div><span class="small muted">Plus ' + money(T.card, C) + ' on the travel card' + T.cards.map(function (k) { return ', ' + money(k.bal, C) + ' on ' + esc(k.name); }).join('') + '</span></div>' +
       (cc ? '<div class="note-box note-warn">' + cc + ' coins (' + money(coinValue(w, C), C) + ') can\'t be changed back. They\'ll wait in your stash for your next trip to ' + C.country + '.</div>' : '') +
-      (S.confirmEnd ? '<div class="card col gap12" style="border:2px solid #1F6B52"><span class="bold">End this trip?</span><span class="muted" style="font-size:14px;line-height:1.5">' + cash + ' in cash and ' + card + ' on the card move to your stash. They\'ll load into your next trip to ' + C.country + '.</span><div class="row gap8"><button class="btn btn-soft grow" style="min-height:48px;font-size:15px"' + A(function () { set({ confirmEnd: false }); }) + '>Not yet</button><button class="btn btn-primary grow" style="min-height:48px;font-size:15px;padding:12px"' + A(function () {
-        var prev = db.stash[T.cur] || { counts: {}, card: 0 };
-        var rec = { counts: merge(prev.counts, w, 1, C), card: (prev.card || 0) + T.card };
-        if (total(rec.counts, C) || rec.card) db.stash[T.cur] = rec;
-        T.ended = true; db.activeId = null; save(); set({ view: 'trips', confirmEnd: false }); toast('Trip ended. Leftovers saved to your ' + C.country + ' stash');
+      (S.confirmEnd ? '<div class="card col gap12" style="border:2px solid #1F6B52"><span class="bold">End this trip?</span><span class="muted" style="font-size:14px;line-height:1.5">' + esc(moneyLeftText(T)) + ' move to your stash. They\'ll load into your next trip to ' + C.country + '.</span><div class="row gap8"><button class="btn btn-soft grow" style="min-height:48px;font-size:15px"' + A(function () { set({ confirmEnd: false }); }) + '>Not yet</button><button class="btn btn-primary grow" style="min-height:48px;font-size:15px;padding:12px"' + A(function () {
+        stashLeftovers(T); T.ended = true; db.activeId = null; save(); set({ view: 'trips', confirmEnd: false }); toast('Trip ended. Leftovers saved to your ' + C.country + ' stash');
       }) + '>End and save</button></div></div>' : '<button class="btn btn-primary"' + A(function () { set({ confirmEnd: true }); }) + '>End trip</button>') + '</div>';
+  }
+  function pastTrip(T) {
+    var C = CURS[T.cur], showAll = S.open === 'all-' + T.id;
+    return '<div class="scroll"><div class="row gap12">' + backBtn(go('trips')) + '<span class="kicker grow">Past trip</span>' + moreBtn(T) + '</div>' +
+      '<div class="row gap12">' + flagBadge(C, 52, 28) + '<div class="col grow"><span class="ellipsis" style="font-size:24px;font-weight:700">' + esc(T.name) + '</span><span class="small muted">' + C.country + ' · ' + tripDates(T) + '</span></div></div>' +
+      summaryBody(T, true) +
+      '<div class="col gap10"><button class="between" style="align-items:center;width:100%"' + A(function () { set({ open: showAll ? null : 'all-' + T.id }); }) + '><h2>History</h2><span class="link row" style="gap:2px">' + (showAll ? 'Hide' : 'See all ' + T.expenses.length) + '</span></button>' +
+      (showAll ? (T.expenses.length ? entryRows(T, T.expenses, true) : '<span class="small muted">Nothing was logged.</span>') : '') + '</div>' +
+      '<button class="btn" style="background:#F8DEDC;color:#7A1F1B;min-height:50px;font-size:16px;margin-top:8px"' + A(function () { set({ delTrip: T.id }); }) + '>Delete trip</button></div>';
+  }
+
+  // ---------- IC / transit cards ----------
+  function openCardAdd(editK) {
+    var T = activeTrip(), C = CURS[T.cur];
+    if (editK) { set({ view: 'cardadd', ca: Object.assign(clone(CA0), { step: 'details', name: editK.name, color: editK.color, bal: String(editK.bal / C.minor), editId: editK.id, back: S.view }), cardSheet: null }); return; }
+    var pre = IC_PRESETS[T.cur];
+    set({ view: 'cardadd', ca: Object.assign(clone(CA0), pre ? { step: 'pick' } : { step: 'details', name: IC_HINT[T.cur] || '', color: '#3A8FD6', custom: true }, { back: S.view }), cardSheet: null });
+  }
+  function cardFace(name, color, balText, sub) {
+    var fg = onColor(color);
+    return '<div class="card-face" style="background:' + color + ';color:' + fg + '"><div class="between" style="align-items:center"><span class="ellipsis" style="font-size:22px;font-weight:700">' + esc(name || 'Card name') + '</span><span style="font-size:12px;font-weight:600;background:rgba(255,255,255,.22);border-radius:6px;padding:3px 8px;flex:none">' + (sub || 'IC card') + '</span></div>' +
+      '<div class="col"><span style="font-size:13px;opacity:.85">Balance</span><span style="font-size:32px;font-weight:700;line-height:1.1">' + balText + '</span></div></div>';
+  }
+  function cardAdd(T) {
+    var C = CURS[T.cur], ca = S.ca, editK = ca.editId ? cardOf(T, ca.editId) : null;
+    function setCa(o) { set({ ca: Object.assign({}, S.ca, { err: '' }, o) }); }
+    var back = function () { if (ca.step === 'details' && !editK && IC_PRESETS[T.cur]) setCa({ step: 'pick' }); else set({ view: ca.back || 'home', ca: clone(CA0) }); };
+    var out = '<div class="scroll"><div class="row gap12">' + backBtn(back) + '<span class="kicker ellipsis">' + esc(T.name) + '</span></div>';
+    if (ca.step === 'pick') {
+      return out + '<div class="col gap6"><h1>Add a card</h1><p class="muted" style="font-size:14px">Which card do you have?</p></div><div class="col gap8">' +
+        IC_PRESETS[T.cur].map(function (p) { return '<button class="card row gap12" style="padding:12px 14px;border-radius:16px;text-align:left"' + A(function () { setCa({ step: 'details', name: p.name, color: p.color, custom: false }); }) + '><span class="ic-chip" style="background:' + p.color + ';color:' + onColor(p.color) + '">IC</span><span class="col grow"><span class="bold">' + p.name + '</span><span class="xs muted">' + p.sub + '</span></span>' + I.right + '</button>'; }).join('') +
+        '<button class="card row gap12" style="padding:12px 14px;border-radius:16px;text-align:left;border:1.5px dashed #CDBFAE"' + A(function () { setCa({ step: 'details', name: '', color: '#7A55A3', custom: true }); }) + '><span class="ic-chip" style="background:#EDE4D8;color:#4A4038;font-size:18px">+</span><span class="col grow"><span class="bold">Kitaca or another card</span><span class="xs muted">Type a name and pick a color</span></span>' + I.right + '</button></div></div>';
+    }
+    var balMinor = parseAmount(ca.bal, C), hist = editK ? T.expenses.filter(function (e) { return e.cardId === editK.id; }).length : 0;
+    var swatches = SWATCHES.slice(); if (swatches.indexOf(ca.color) < 0) swatches.unshift(ca.color);
+    out += '<h1>' + (editK ? 'Edit card' : 'Add a card') + '</h1>' + cardFace(ca.name, ca.color, money(balMinor, C), IC_HINT[T.cur] && T.cur !== 'JPY' ? 'Transit card' : 'IC card') +
+      '<label class="field">Name<input placeholder="' + esc(IC_HINT[T.cur] || 'Card name') + '" value="' + esc(ca.name) + '"' + inp('caName', function (v) { S.ca.name = v; var el = root.querySelector('.card-face .ellipsis'); if (el) el.textContent = v || 'Card name'; }) + '></label>' +
+      '<div class="col gap8"><span class="small muted" style="font-weight:500;font-size:14px">Color</span><div class="wrap" style="gap:10px">' + swatches.map(function (c) { var on = c === ca.color; return '<button class="swatch' + (on ? ' on' : '') + '" style="background:' + c + '" aria-label="Color ' + c + '" aria-pressed="' + on + '"' + A(function () { setCa({ color: c }); }) + '>' + (on ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="' + onColor(c) + '" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : '') + '</button>'; }).join('') + '</div></div>' +
+      '<label class="field">Balance on the card now (' + esc((C.pre || C.post).trim()) + ')<input inputmode="decimal" placeholder="0" value="' + esc(ca.bal) + '"' + inp('caBal', function (v) { S.ca.bal = v; var el = root.querySelector('.card-face .col span:last-child'); if (el) el.textContent = money(parseAmount(v, C), C); }) + '></label>' +
+      '<span class="xs muted" style="line-height:1.5;margin-top:-8px">' + (editK ? 'Changing the balance saves a balance fix in the card\'s history. It isn\'t counted as spending.' : 'Enter what\'s on the card now. To load more from your cash later, tap the card and choose Top up.') + '</span>' +
+      errBox(ca.err) +
+      '<button class="btn btn-primary"' + A(function () {
+        var nm = String(S.ca.name || '').trim(); if (!nm) { setCa({ err: 'Give the card a name.' }); return; }
+        var bal = parseAmount(S.ca.bal, C);
+        if (editK) {
+          editK.name = nm; editK.color = S.ca.color;
+          var diff = bal - editK.bal;
+          if (diff) commitE(T, null, { id: Date.now(), ts: Date.now(), name: 'Balance fix', cat: 'Other', method: 'icfix', cardId: editK.id, amount: diff, given: {}, got: {} });
+          else save();
+          set({ view: ca.back || 'home', ca: clone(CA0) }); toast('Card saved');
+        } else {
+          T.cards.push({ id: uuid(), name: nm, color: S.ca.color, bal: bal }); save();
+          set({ view: ca.back || 'home', ca: clone(CA0) }); toast(nm + ' added');
+        }
+      }) + '>' + (editK ? 'Save card' : 'Add card') + '</button>';
+    if (editK) {
+      if (hist) out += '<span class="xs muted" style="text-align:center">This card has history, so it can\'t be removed. It moves to your stash when the trip ends.</span>';
+      else out += ca.confirmRemove ? '<div class="row gap8"><span class="grow small bold">Remove ' + esc(editK.name) + '?</span><button class="btn-soft"' + A(function () { setCa({ confirmRemove: false }); }) + '>Keep</button><button class="btn-danger"' + A(function () { T.cards = T.cards.filter(function (k) { return k.id !== editK.id; }); save(); set({ view: ca.back || 'home', ca: clone(CA0) }); toast('Card removed'); }) + '>Remove</button></div>' :
+        '<button class="link" style="align-self:center;color:#A8322C"' + A(function () { setCa({ confirmRemove: true }); }) + '>Remove this card</button>';
+    }
+    return out + '</div>';
+  }
+  function openIcTop(k) { set({ view: 'ictop', it: Object.assign(clone(IT0), { cardId: k.id, back: S.view }), cardSheet: null }); }
+  function icTop(T) {
+    var C = CURS[T.cur], it = S.it, editE = null;
+    if (it.editId) T.expenses.forEach(function (e) { if (e.id === it.editId) editE = e; });
+    var base = (editE && applyAll(T, editE, null, C)) || { w: T.wallet, c: T.card, k: T.cards }, k = null;
+    base.k.forEach(function (x) { if (x.id === it.cardId) k = x; });
+    if (!k) { S.view = 'home'; return home(T); }
+    function setIt(o) { set({ it: Object.assign({}, S.it, { err: '' }, o) }); }
+    var isCash = it.via === 'cash', bw = base.w;
+    var amt = isCash ? total(it.counts, C) : parseAmount(it.amount, C);
+    var back = function () { set({ view: it.back || 'home', it: clone(IT0) }); };
+    var out = '<div class="scroll"><div class="row gap12">' + backBtn(back) + '<span class="kicker ellipsis">' + esc(T.name) + '</span></div>' +
+      '<div class="row gap12"><span style="width:52px;height:34px;border-radius:7px;background:' + k.color + ';flex:none"></span><div class="col grow"><h1 class="ellipsis">' + (editE ? 'Edit top-up' : 'Top up ' + esc(k.name)) + '</h1><span class="small muted" style="font-size:14px">Balance now ' + money(k.bal, C) + '</span></div></div>' +
+      '<div class="seg">' + [['cash', 'Cash'], ['credit', 'Credit card']].map(function (m) { return '<button class="' + (it.via === m[0] ? 'on' : '') + '"' + A(function () { setIt({ via: m[0] }); }) + '>' + m[1] + '</button>'; }).join('') + '</div>';
+    if (isCash) {
+      var avail = C.den.filter(function (x) { return (bw[x.id] || 0) > 0; });
+      out += '<div class="panel"><div class="between" style="color:#E9DCCB;font-size:13px;font-weight:500"><span>Notes and coins you put in</span><span>Tap to add</span></div>' +
+        (avail.length ? '<div class="grid2" style="gap:12px 10px">' + avail.map(function (x) {
+          var have = bw[x.id] || 0, n = it.counts[x.id] || 0, coin = x.kind === 'coin';
+          return '<div class="rel"><button class="tap-note" style="border-color:' + x.edge + ';background:' + x.bg + ';color:' + x.fg + ';border-radius:' + (coin ? '999px' : '8px') + '" aria-label="Add ' + esc(x.label) + '"' + A(function () { if (n < have) setIt({ counts: bump(S.it.counts, x.id, 1, have) }); }) + '><span style="font-size:17px;font-weight:700">' + esc(x.label) + '</span><span style="font-size:13px;font-weight:600">' + (n ? n + ' of ' + have : '×' + have) + '</span></button>' +
+            (n ? '<button class="minus-badge" aria-label="Remove one ' + esc(x.label) + '"' + A(function () { setIt({ counts: bump(S.it.counts, x.id, -1) }); }) + '>' + I.minus + '</button>' : '') + '</div>';
+        }).join('') + '</div>' : '<span style="color:#C9B8A5;font-size:14px">There\'s no cash in your wallet. Add cash first, or top up with a credit card.</span>') + '</div>';
+    } else {
+      out += '<label class="field">Amount in ' + C.code + '<input inputmode="decimal" placeholder="0" style="font-size:22px" value="' + esc(it.amount) + '"' + inp('itAmt', function (v) { S.it.amount = v; }) + '></label>';
+    }
+    out += '<div class="card col gap8" style="border-radius:18px"><div class="between"><span class="bold">Adds to ' + esc(k.name) + '</span><span class="bolder" style="color:#1F6B52;font-size:18px">+' + money(amt, C) + '</span></div>' +
+      '<div class="between small"><span class="muted">' + esc(k.name) + '</span><span class="bold">' + money(k.bal, C) + ' → ' + money(k.bal + amt, C) + '</span></div>' +
+      (isCash ? '<div class="between small"><span class="muted">Cash</span><span class="bold">' + money(total(bw, C), C) + ' → ' + money(total(bw, C) - amt, C) + '</span></div>' : '') + '</div>' +
+      '<div class="note-box note-ok small">Moving money to a card isn\'t spending. It\'s counted when you pay with ' + esc(k.name) + '.</div>' +
+      errBox(it.err) +
+      '<button class="btn btn-primary"' + A(function () {
+        var a = isCash ? total(S.it.counts, C) : parseAmount(S.it.amount, C);
+        if (!a) { setIt({ err: isCash ? 'Tap the notes or coins you put in.' : 'Enter the amount you loaded.' }); return; }
+        var e = { id: editE ? editE.id : Date.now(), ts: editE ? editE.ts : Date.now(), name: isCash ? 'Top up with cash' : 'Top up by credit card', cat: 'Other', method: 'icin', via: it.via, cardId: k.id, amount: a, given: isCash ? clone(S.it.counts) : {}, got: {} };
+        if (!commitE(T, editE, e)) { setIt({ err: 'Some of that money is already spent. Fix the later entries first.' }); return; }
+        set({ view: it.back || 'home', it: clone(IT0), open: null }); toast(editE ? 'Top-up updated' : money(a, C) + ' added to ' + k.name);
+      }) + '>' + (editE ? 'Save changes' : 'Top up ' + money(amt, C)) + '</button></div>';
+    return out;
+  }
+
+  // ---------- bookings before the trip ----------
+  function openBooking(b) {
+    var T = activeTrip(), C = CURS[T.cur];
+    if (b) set({ view: 'booking', bk: Object.assign(clone(BK0), { id: b.id, type: b.type, name: b.name, cur: b.cur, amount: String(b.cur === 'THB' ? b.amount / 100 : b.amount / C.minor), paid: b.paid, date: b.date || '', back: S.view }) });
+    else set({ view: 'booking', bk: Object.assign(clone(BK0), { date: today(), back: S.view }) });
+  }
+  function bookingScreen(T) {
+    var C = CURS[T.cur], bk = S.bk;
+    function setBk(o) { set({ bk: Object.assign({}, S.bk, { err: '' }, o) }); }
+    var back = function () { set({ view: bk.back || 'summary', bk: clone(BK0) }); };
+    var out = '<div class="scroll"><div class="row gap12">' + backBtn(back) + '<span class="kicker ellipsis">' + esc(T.name) + ' · Before the trip</span></div>' +
+      '<h1>' + (bk.id ? 'Edit booking' : 'Add a booking') + '</h1>' +
+      '<div class="wrap" style="gap:8px">' + BOOK_TYPES.map(function (t) { var on = bk.type === t.id; return '<button class="pill" style="border-color:' + (on ? t.fg : '#DDD0BF') + ';background:' + (on ? t.bg : '#FFFDF9') + ';color:' + (on ? t.fg : '#4A4038') + '"' + A(function () { setBk({ type: t.id }); }) + '>' + t.id + '</button>'; }).join('') + '</div>' +
+      '<label class="field">What is it?<input placeholder="' + ({ Flight: 'BKK → NRT, return', Hotel: 'Hotel, 4 nights', Train: 'JR Pass', Tour: 'Day tour' }[bk.type] || 'Travel insurance') + '" value="' + esc(bk.name) + '"' + inp('bkName', function (v) { S.bk.name = v; }) + '></label>' +
+      '<div class="col gap8"><span class="small muted" style="font-weight:500;font-size:14px">Amount</span><div class="seg">' + [['THB', '฿ THB'], [T.cur, (C.pre || C.post).trim() + ' ' + T.cur]].map(function (m) { return '<button class="' + (bk.cur === m[0] ? 'on' : '') + '"' + A(function () { setBk({ cur: m[0] }); }) + '>' + esc(m[1]) + '</button>'; }).join('') + '</div>' +
+      '<div class="field"><input inputmode="decimal" placeholder="0" style="font-size:22px" value="' + esc(bk.amount) + '"' + inp('bkAmt', function (v) { S.bk.amount = v; }) + '></div></div>' +
+      '<div class="col gap8"><span class="small muted" style="font-weight:500;font-size:14px">Paid with</span><div class="seg">' + ['Credit card', 'Transfer', 'Cash (฿)'].map(function (m) { return '<button class="' + (bk.paid === m ? 'on' : '') + '"' + A(function () { setBk({ paid: m }); }) + '>' + m + '</button>'; }).join('') + '</div></div>' +
+      '<label class="field">Paid on<input type="date" value="' + esc(bk.date) + '"' + inp('bkDate', function (v) { S.bk.date = v; }) + '></label>' +
+      '<span class="xs muted" style="line-height:1.5">Counts toward the whole trip cost and never touches your cash wallet.' + (T.cur !== 'THB' ? ' Amounts in ' + C.code + ' are converted at this trip\'s rate.' : '') + '</span>' +
+      errBox(bk.err) +
+      '<button class="btn btn-primary"' + A(function () {
+        var nm = String(S.bk.name || '').trim(); if (!nm) { setBk({ err: 'Say what the booking is.' }); return; }
+        var n = parseFloat(String(S.bk.amount || '').replace(/[, ]/g, '')); if (!(n > 0)) { setBk({ err: 'Enter the amount you paid.' }); return; }
+        var b = { id: S.bk.id || Date.now(), type: S.bk.type, name: nm, cur: S.bk.cur, amount: S.bk.cur === 'THB' ? Math.round(n * 100) : Math.round(n * C.minor), paid: S.bk.paid, date: S.bk.date || '' };
+        if (S.bk.id) T.bookings = T.bookings.map(function (x) { return x.id === b.id ? b : x; }); else T.bookings.push(b);
+        save(); set({ view: bk.back || 'summary', bk: clone(BK0) }); toast(S.bk.id ? 'Booking updated' : 'Booking added');
+      }) + '>Save booking</button>';
+    if (bk.id) out += bk.confirmDel ? '<div class="row gap8"><span class="grow small bold">Delete this booking?</span><button class="btn-soft"' + A(function () { setBk({ confirmDel: false }); }) + '>Keep</button><button class="btn-danger"' + A(function () { T.bookings = T.bookings.filter(function (x) { return x.id !== bk.id; }); save(); set({ view: bk.back || 'summary', bk: clone(BK0) }); toast('Booking deleted'); }) + '>Delete</button></div>' :
+      '<button class="link" style="align-self:center;color:#A8322C"' + A(function () { setBk({ confirmDel: true }); }) + '>Delete booking</button>';
+    return out + '</div>';
   }
 
   function stash(T) {
@@ -638,7 +916,7 @@
   function overlays() {
     var T = activeTrip(), out = '';
     var navViews = ['home', 'history', 'summary', 'stash', 'trips'];
-    if (db.stage === 'app' && !S.coinSheet && !S.settings && navViews.indexOf(S.view) >= 0) {
+    if (db.stage === 'app' && !S.coinSheet && !S.settings && !S.cardSheet && !S.tripMenu && !S.delTrip && navViews.indexOf(S.view) >= 0) {
       if (T) out += '<nav class="nav nav5" aria-label="Main">' +
         '<button class="nav-item' + (S.view === 'home' ? ' on' : '') + '"' + A(go('home')) + '>' + I.wallet + 'Wallet</button>' +
         '<button class="nav-item' + (S.view === 'history' ? ' on' : '') + '"' + A(go('history')) + '>' + I.list + 'History</button>' +
@@ -651,6 +929,9 @@
         '<button class="nav-item' + (S.view === 'stash' ? ' on' : '') + '"' + A(go('stash')) + '>' + I.box + 'Stash</button></nav>';
     }
     if (S.coinSheet && T) out += coinSheet(T);
+    if (S.cardSheet && T) out += cardSheet(T);
+    if (S.tripMenu) out += tripMenuSheet();
+    if (S.delTrip) out += delTripSheet();
     if (S.settings) out += settingsSheet(T);
     if (S.toast) out += '<div class="toast" role="status">' + esc(S.toast) + '</div>';
     return out;
@@ -684,6 +965,51 @@
     return '<div class="overlay"><button class="overlay-hit" aria-label="Close"' + A(close) + '></button><div class="sheet" role="dialog" aria-label="' + esc(d.label) + '"><div class="grabber"></div>' + head + body + '</div></div>';
   }
 
+  function sheetWrap(label, close, body) { return '<div class="overlay"><button class="overlay-hit" aria-label="Close"' + A(close) + '></button><div class="sheet" role="dialog" aria-label="' + esc(label) + '"><div class="grabber"></div>' + body + '</div></div>'; }
+  function cardSheet(T) {
+    var C = CURS[T.cur], close = function () { set({ cardSheet: null, open: null, confirmDel: null }); };
+    if (S.cardSheet === 'travel') {
+      var tl = T.expenses.filter(function (e) { return e.method === 'card' || e.method === 'cardin'; });
+      return sheetWrap('Travel card', close, cardFace('Travel card', '#57473E', money(T.card, C), 'Prepaid') +
+        '<button class="btn btn-primary" style="min-height:50px;padding:13px"' + A(function () { set({ view: 'cardtop', ct: clone(CT0), cardSheet: null }); }) + '>Top up</button>' +
+        '<span class="bold" style="font-size:15px;margin-top:4px">Travel card history</span>' + (tl.length ? '<div class="col gap8">' + entryRows(T, tl) + '</div>' : '<span class="small muted">Nothing on this card yet.</span>'));
+    }
+    var k = cardOf(T, S.cardSheet); if (!k) return '';
+    var list = T.expenses.filter(function (e) { return e.cardId === k.id; });
+    return sheetWrap(k.name, close, cardFace(k.name, k.color, money(k.bal, C)) +
+      '<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px"><button class="btn btn-primary" style="min-height:50px;padding:13px"' + A(function () { openIcTop(k); }) + '>Top up</button><button class="btn" style="min-height:50px;padding:13px;background:#F4EEE5"' + A(function () { openCardAdd(k); }) + '>Edit card</button></div>' +
+      '<span class="bold" style="font-size:15px;margin-top:4px">' + esc(k.name) + ' history</span>' + (list.length ? '<div class="col gap8">' + entryRows(T, list) + '</div>' : '<span class="small muted">No taps or top-ups yet. Pick ' + esc(k.name) + ' on New expense when you pay with it.</span>'));
+  }
+  function tripMenuSheet() {
+    var t = tripById(S.tripMenu); if (!t) return '';
+    var C = CURS[t.cur], close = function () { set({ tripMenu: null }); };
+    var acts = [
+      ['Open trip summary', function () { if (t.ended) set({ view: 'past', pastId: t.id, tripMenu: null, open: null }); else set({ view: 'summary', tripMenu: null }); }, ''],
+      ['Edit name and dates', function () { openTripEdit(t.id); }, ''],
+      ['Delete trip', function () { set({ tripMenu: null, delTrip: t.id, delMode: 'keep' }); }, 'background:#F8DEDC;color:#7A1F1B']
+    ];
+    return sheetWrap(t.name, close, '<div class="row gap12" style="margin-bottom:4px">' + flagBadge(C, 40, 22) + '<span class="col grow"><span class="ellipsis" style="font-size:18px;font-weight:700">' + esc(t.name) + '</span><span class="small muted">' + tripDates(t) + '</span></span></div>' +
+      acts.map(function (a) { return '<button class="sheet-act" style="min-height:52px;justify-content:center;' + a[2] + '"' + A(a[1]) + '><span style="font-size:16px;font-weight:600">' + a[0] + '</span></button>'; }).join(''));
+  }
+  function delTripSheet() {
+    var t = tripById(S.delTrip); if (!t) return '';
+    var C = CURS[t.cur], close = function () { set({ delTrip: null }); }, cur = db.activeId === t.id, St = db.stash[t.cur];
+    var n = t.expenses.length, body = '<span style="font-size:20px;font-weight:700">Delete ' + esc(t.name) + '?</span>';
+    if (cur) {
+      var hasMoney = total(t.wallet, C) || t.card || t.cards.some(function (k) { return k.bal; });
+      body += '<span style="font-size:15px;color:#4A4038;line-height:1.5">' + (hasMoney ? 'You still have ' + esc(moneyLeftText(t)) + '.' : 'Its ' + n + (n === 1 ? ' entry' : ' entries') + ', bookings and summary are erased for good.') + '</span>';
+      if (hasMoney) body += [['keep', 'Keep the money in my ' + C.country + ' stash', 'Only the trip\'s entries are deleted'], ['all', 'Delete everything', 'For test trips. Nothing is kept']].map(function (o) {
+        var sel = S.delMode === o[0];
+        return '<button class="option' + (sel ? ' on' : '') + '" style="min-height:64px;padding:12px 14px"' + A(function () { set({ delMode: o[0] }); }) + '><span class="radio' + (sel ? ' on' : '') + '"><span></span></span><span class="col gap4"><span style="font-size:16px;font-weight:600">' + o[1] + '</span><span class="small muted">' + o[2] + '</span></span></button>';
+      }).join('');
+    } else {
+      body += '<span style="font-size:15px;color:#4A4038;line-height:1.5">Its ' + n + (n === 1 ? ' entry' : ' entries') + ', bookings and summary are erased for good.</span>' +
+        (St ? '<span class="small muted" style="line-height:1.5">Your ' + C.country + ' stash (' + money(total(St.counts, C), C) + ') stays. It isn\'t part of this trip anymore.</span>' : '');
+    }
+    body += '<span class="xs muted">Tip: Settings › Save a backup first if you might want it back.</span>' +
+      '<div class="grid2" style="margin-top:4px"><button class="btn" style="background:#F4EEE5;min-height:50px;padding:12px"' + A(close) + '>' + (cur ? 'Keep trip' : 'Keep') + '</button><button class="btn" style="background:#A8322C;color:#fff;min-height:50px;padding:12px"' + A(function () { deleteTrip(t, S.delMode !== 'all'); }) + '>Delete trip</button></div>';
+    return sheetWrap('Delete trip', close, body);
+  }
   function settingsSheet(T) {
     var on = db.remind.on;
     var pushLine = S.pushMsg ? '<div class="note-box ' + (/on for this phone|sent/i.test(S.pushMsg) ? 'note-ok' : 'note-warn') + '" style="font-size:13px">' + esc(S.pushMsg) + '</div>' : '';
@@ -694,11 +1020,13 @@
         '<span class="xs muted">Set it to when you\'re usually back at the hotel. The time follows your phone\'s time zone, so it stays right abroad. At that time the Recount button also turns into Check.</span>' +
         (db.pushOn ? '<button class="link" style="align-self:flex-start"' + A(sendTest) + '>' + (S.pushBusy ? 'Sending…' : 'Send a test notification') + '</button>' : '<button class="link" style="align-self:flex-start"' + A(function () { enablePush(); }) + '>Turn on notifications for this phone</button>') : '') +
       pushLine + '</div>' +
+      '<div class="col gap10" style="background:#F4EEE5;border-radius:18px;padding:14px"><span class="col gap4"><span style="font-size:16px;font-weight:600">Appearance</span><span class="small muted">Notes, coins and cards keep their real colors.</span></span>' +
+      '<div class="seg">' + [['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(function (m) { return '<button class="' + (db.appearance === m[0] ? 'on' : '') + '"' + A(function () { db.appearance = m[0]; persist(); applyTheme(); render(); }) + '>' + m[1] + '</button>'; }).join('') + '</div></div>' +
       (T ? '<button class="sheet-act row" style="flex-direction:row;align-items:center"' + A(openTripEdit) + '><span class="col grow gap4"><span style="font-size:16px;font-weight:600">Trip details</span><span class="small muted">Name, dates, length and exchange rate</span></span>' + I.right + '</button>' : '') +
       '<div class="col gap8" style="background:#F4EEE5;border-radius:18px;padding:14px"><span style="font-size:16px;font-weight:600">Your data</span><span class="xs muted">Everything is saved on this phone only. Keep a backup before you delete the app.</span>' +
       '<div class="row gap8"><button class="btn-soft" style="background:#FFFDF9"' + A(downloadBackup) + '>Save a backup</button><label class="btn-soft" style="background:#FFFDF9;display:inline-flex;align-items:center;cursor:pointer">Restore<input type="file" accept="application/json,.json" data-file="1" style="display:none"></label>' +
       (S.confirmReset ? '' : '<button class="btn-danger-soft" style="margin-left:auto"' + A(function () { set({ confirmReset: true }); }) + '>Erase all</button>') + '</div>' +
-      (S.confirmReset ? '<div class="row gap8"><span class="grow small bold">Erase every trip and your stash?</span><button class="btn-soft" style="background:#FFFDF9"' + A(function () { set({ confirmReset: false }); }) + '>Keep</button><button class="btn-danger"' + A(function () { var keep = { deviceId: db.deviceId, pushOn: db.pushOn, remind: db.remind }; db = Object.assign(clone(DB0), keep); save(); set({ settings: false, confirmReset: false, view: 'welcome' }); }) + '>Erase</button></div>' : '') + '</div>' +
+      (S.confirmReset ? '<div class="row gap8"><span class="grow small bold">Erase every trip and your stash?</span><button class="btn-soft" style="background:#FFFDF9"' + A(function () { set({ confirmReset: false }); }) + '>Keep</button><button class="btn-danger"' + A(function () { var keep = { deviceId: db.deviceId, pushOn: db.pushOn, remind: db.remind, appearance: db.appearance }; db = Object.assign(clone(DB0), keep); save(); set({ settings: false, confirmReset: false, view: 'welcome' }); }) + '>Erase</button></div>' : '') + '</div>' +
       '<button class="btn btn-primary"' + A(function () { set({ settings: false, confirmReset: false }); }) + '>Done</button>' +
       '<div class="row" style="justify-content:center;gap:8px;padding-top:4px">' + LOGO(22) + '<span class="xs muted" style="line-height:1.4">Travel Wallet · Version ' + APP_VERSION + '<br>Updated ' + APP_UPDATED + '</span></div></div></div>';
   }
@@ -715,7 +1043,7 @@
       try {
         var data = JSON.parse(r.result);
         if (!data || !Array.isArray(data.trips) || typeof data.stash !== 'object') throw new Error('bad');
-        var keepId = db.deviceId; db = Object.assign(clone(DB0), data, { deviceId: keepId, stage: 'app' }); save();
+        var keepId = db.deviceId; db = migrate(Object.assign(clone(DB0), data, { deviceId: keepId, stage: 'app' })); save(); applyTheme();
         set({ settings: false, view: activeTrip() ? 'home' : 'trips' }); toast('Backup restored');
       } catch (e) { toast("That file isn't a Travel Wallet backup"); }
     };
@@ -801,6 +1129,16 @@
     var url = new URL('./tw-summary', location.href).href;
     caches.open('tw-meta').then(function (c) { return c.put(url, new Response(JSON.stringify({ text: text }), { headers: { 'Content-Type': 'application/json' } })); }).catch(function () { });
   }
+
+  // ===================== appearance =====================
+  var darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+  function applyTheme() {
+    var dark = db.appearance === 'dark' || (db.appearance !== 'light' && !!(darkMQ && darkMQ.matches));
+    document.documentElement.classList.toggle('dark', dark);
+    var m = document.querySelector('meta[name="theme-color"]'); if (m) m.setAttribute('content', dark ? '#17120F' : '#F1EADF');
+  }
+  if (darkMQ) { var onScheme = function () { if (db.appearance === 'auto') applyTheme(); }; if (darkMQ.addEventListener) darkMQ.addEventListener('change', onScheme); else if (darkMQ.addListener) darkMQ.addListener(onScheme); }
+  applyTheme();
 
   // ===================== start =====================
   if ('serviceWorker' in navigator) {

@@ -88,3 +88,67 @@ p { margin: 0; }
 .radio.on { border-color: var(--accent); } .radio.on span { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
 .bar-bg { height: 10px; border-radius: 999px; background: #EFE6DA; } .bar { height: 10px; border-radius: 999px; }
 .dot-red { position: absolute; top: -4px; right: -4px; width: 12px; height: 12px; border-radius: 50%; background: #E24B4A; border: 2px solid var(--bg); }
+
+/* ---------- cards, trips menu (v1.2) ---------- */
+.card-pill { border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 600; min-height: 32px; display: inline-flex; align-items: center; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.card-add { border: 1.5px dashed #8A7B6F; color: #C9B8A5; background: transparent; }
+.more-btn { width: 40px; height: 40px; border-radius: 12px; background: var(--soft); color: var(--ink); display: flex; align-items: center; justify-content: center; flex: none; }
+.more-btn.on-dark { background: rgba(255, 255, 255, 0.12); color: #F4EAD9; }
+.method-btn { display: flex; align-items: center; justify-content: center; gap: 6px; border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 9px 8px; font-size: 14px; font-weight: 600; min-height: 44px; min-width: 0; }
+.method-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.card-face { height: 180px; border-radius: 18px; padding: 18px; display: flex; flex-direction: column; justify-content: space-between; flex: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06); }
+.ic-chip { width: 52px; height: 34px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex: none; }
+.swatch { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid transparent; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08); }
+.swatch.on { border-color: var(--card); box-shadow: 0 0 0 2.5px var(--ink); }
+.field input[type="date"] { -webkit-appearance: none; appearance: none; min-height: 50px; text-align: left; }
+
+/* ---------- night mode: Espresso ----------
+   Neutrals are remapped; note, coin and card colors are never in this list, so they stay real. */
+html.dark {
+  --bg: #17120F; --card: #241D19; --ink: #F1EADF; --muted: #B3A597; --line: #3A2F28; --line2: #4A3E36;
+  --soft: #2F2621; --leather: #3A2E27; --leather2: #241B17; --cream: #F4EAD9; --accent: #2E9A72; --accent-bg: #1D3B30; --accent-ink: #A6DDC4;
+  --warn-bg: #3A2E14; --warn-ink: #F0D58C; --bad-bg: #3B1E1C; --bad-ink: #F2B8B3; --bad: #B8423B;
+  color-scheme: dark;
+}
+html.dark .toast { background: #F1EADF; color: #17120F; }
+html.dark .nav { border-color: var(--line); }
+html.dark .nav-item { color: #9A8B7D; }
+html.dark .overlay { background: rgba(0, 0, 0, 0.55); }
+html.dark .bar-bg { background: var(--soft); }
+html.dark .entry-more { border-top-color: var(--line2); }
+html.dark .radio { border-color: #7A6C60; }
+html.dark .dark, html.dark .welcome { background: var(--leather); }
+html.dark .icon-btn, html.dark .step-btn { color: var(--ink); }
+html.dark .swatch.on { border-color: var(--bg); }
+html.dark .card-add { border-color: #8A7B6F; }
+html.dark .more-btn:not(.on-dark) { color: var(--ink); }
+/* inline light backgrounds */
+html.dark [style*="background:#FFFDF9"] { background: var(--card) !important; }
+html.dark [style*="background:#F1EADF"], html.dark [style*="background:#F4EEE5"] { background: var(--soft) !important; }
+html.dark [style*="background:#EDE4D8"], html.dark [style*="background:#EFE6DA"] { background: var(--line) !important; }
+html.dark [style*="background:#3F322B"] { background: var(--leather) !important; }
+html.dark [style*="background:#CDEBDD"] { background: var(--accent-bg) !important; }
+html.dark [style*="background:#FBEFD2"] { background: var(--warn-bg) !important; }
+html.dark [style*="background:#F8DEDC"] { background: var(--bad-bg) !important; }
+html.dark [style*="background:#E5DED3"] { background: #3A322C !important; }
+html.dark [style*="height:1px;background:#EDE4D8"] { background: var(--line) !important; }
+/* inline text colors */
+html.dark [style*="color:#2B211C"] { color: var(--ink) !important; }
+html.dark [style*="color:#75675C"], html.dark [style*="color:#8A7B6F"] { color: var(--muted) !important; }
+html.dark [style*="color:#4A4038"], html.dark [style*="color:#5C4F45"] { color: #D6C9BC !important; }
+html.dark [style*="color:#134733"] { color: var(--accent-ink) !important; }
+html.dark [style*="color:#7A1F1B"] { color: var(--bad-ink) !important; }
+html.dark [style*="color:#5E4306"] { color: var(--warn-ink) !important; }
+html.dark [style*="color:#1F6B52"] { color: #5CC79D !important; }
+html.dark [style*="color:#A8322C"] { color: #F08A82 !important; }
+/* inline borders */
+html.dark [style*="solid #DDD0BF"], html.dark [style*="solid #CDBFAE"], html.dark [style*="solid #E5D9CA"], html.dark [style*="solid #EDE4D8"] { border-color: var(--line2) !important; }
+html.dark [style*="dashed #CDBFAE"] { border-color: #5A4C42 !important; }
+html.dark [style*="border:2px solid #1F6B52"] { border-color: var(--accent) !important; }
+/* keep money colors exact: anything with a note/coin/card style already uses its own hex, which is not in the lists above */
+html.dark [style*="background:#5E4306"] { background: #F0D58C !important; color: #3A2E14 !important; }
+.coin-zero { opacity: 0.4; }
+html.dark .coin-zero { opacity: 0.72; }
+html.dark .nav-item.on { color: #5CC79D; }
+html.dark .swatch { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18); }
+html.dark .swatch.on { box-shadow: 0 0 0 2.5px var(--ink); }
