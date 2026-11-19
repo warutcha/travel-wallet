@@ -63,29 +63,37 @@
   function merge(a, b, sign, C) { var r = {}; C.den.forEach(function (d) { var n = ((a && a[d.id]) || 0) + sign * ((b && b[d.id]) || 0); if (n) r[d.id] = n; }); return r; }
   function bump(c, id, delta, max) { var r = Object.assign({}, c); var n = (r[id] || 0) + delta; if (n < 0) n = 0; if (max != null && n > max) n = max; if (n) r[id] = n; else delete r[id]; return r; }
   function cashy(m) { return m === 'cash' || m === 'topup' || m === 'lost' || m === 'adjust' || m === 'icin'; }
-  function applyE(w, card, e, sign, C) { var w2 = w, c2 = card; if (cashy(e.method)) w2 = merge(merge(w, e.given, -sign, C), e.got, sign, C); if (e.method === 'card') c2 = card - sign * e.amount; if (e.method === 'cardin') c2 = card + sign * e.amount; return { w: w2, c: c2 }; }
+  function applyE(w, card, e, sign, C) { var w2 = w, c2 = card; if (cashy(e.method)) w2 = merge(merge(w, e.given, -sign, C), e.got, sign, C); if (e.method === 'card') c2 = card - sign * (e.fromWon != null ? e.fromWon : e.amount); if (e.method === 'cardin' || e.method === 'cardfix') c2 = card + sign * e.amount; return { w: w2, c: c2 }; }
   function okW(w, c, C) { return c >= 0 && !C.den.some(function (x) { return (w[x.id] || 0) < 0; }); }
   function parseAmount(str, C) { var n = parseFloat(String(str || '').replace(/[, ]/g, '')); return isFinite(n) && n > 0 ? Math.round(n * C.minor) : 0; }
   // Apply/undo an entry on cash wallet, travel card and IC cards together.
   function applyAll(T, oldE, newE, C) {
-    var s = { w: T.wallet, c: T.card, k: clone(T.cards || []) };
+    var s = { w: T.wallet, c: T.card, k: clone(T.cards || []), b: db.cardBaht || 0 };
     function ap(e, sign) {
       var r = applyE(s.w, s.c, e, sign, C); s.w = r.w; s.c = r.c;
+      if (e.method === 'card' && e.baht) s.b -= sign * e.baht;
+      if (e.method === 'bahtin') s.b += sign * e.amount;
+      if (e.method === 'cardfix' && e.bahtDiff) s.b += sign * e.bahtDiff;
       if (e.cardId) s.k.forEach(function (k) { if (k.id === e.cardId) { if (e.method === 'ic') k.bal -= sign * e.amount; else if (e.method === 'icin' || e.method === 'icfix') k.bal += sign * e.amount; } });
     }
     if (oldE) ap(oldE, -1);
     if (newE) ap(newE, 1);
-    if (!okW(s.w, s.c, C) || s.k.some(function (k) { return k.bal < 0; })) return null;
+    if (!okW(s.w, s.c, C) || s.b < 0 || s.k.some(function (k) { return k.bal < 0; })) return null;
     return s;
   }
   function commitE(T, oldE, newE) {
     var s = applyAll(T, oldE, newE, CURS[T.cur]); if (!s) return false;
-    T.wallet = s.w; T.card = s.c; T.cards = s.k;
+    T.wallet = s.w; T.card = s.c; T.cards = s.k; db.cardBaht = s.b;
     if (oldE && newE) T.expenses = T.expenses.map(function (x) { return x.id === oldE.id ? newE : x; });
     else if (newE) T.expenses = [newE].concat(T.expenses);
     else if (oldE) T.expenses = T.expenses.filter(function (x) { return x.id !== oldE.id; });
     save(); return true;
   }
+  // Travel card: a local-currency pocket per trip (T.card) and one baht pocket for the whole card (db.cardBaht, in satang).
+  function pocketName(C) { var w = C.name.split(' ').pop(); return w === 'dollar' ? C.code : w.charAt(0).toUpperCase() + w.slice(1); }
+  function baht2(v) { return '฿' + (v / 100).toLocaleString('en-US', { minimumFractionDigits: v % 100 ? 2 : 0, maximumFractionDigits: 2 }); }
+  function parseBaht(str) { var n = parseFloat(String(str || '').replace(/[, ]/g, '')); return isFinite(n) && n > 0 ? Math.round(n * 100) : 0; }
+  function cardText(T, C) { return money(T.card, C) + (db.cardBaht ? ' + ' + baht2(db.cardBaht) : ''); }
   function tripById(id) { for (var i = 0; i < db.trips.length; i++) if (db.trips[i].id === id) return db.trips[i]; return null; }
   function cardOf(T, id) { var r = null; (T.cards || []).forEach(function (k) { if (k.id === id) r = k; }); return r; }
   // Text color for a card face; '#291F1A' (not the theme ink) so night mode never recolors it.
@@ -130,7 +138,7 @@
     { id: 'Other', bg: '#E5DED3', fg: '#4A4038', bar: '#A39684' }
   ];
   function catOf(id) { for (var i = 0; i < CATS.length; i++) if (CATS[i].id === id) return CATS[i]; return CATS[4]; }
-  var METHOD_TEXT = { cash: 'Cash', card: 'Travel card', credit: 'Credit card', topup: 'Cash in', cardin: 'Card top-up', lost: 'Lost', adjust: 'Wallet recount', ic: 'IC card', icin: 'IC top-up', icfix: 'Balance fix' };
+  var METHOD_TEXT = { cash: 'Cash', card: 'Travel card', credit: 'Credit card', topup: 'Cash in', cardin: 'Card top-up', bahtin: 'Card top-up', cardfix: 'Card balance fix', lost: 'Lost', adjust: 'Wallet recount', ic: 'IC card', icin: 'IC top-up', icfix: 'Balance fix' };
   function methodText(T, e) {
     var k = e.cardId ? cardOf(T, e.cardId) : null, n = k ? k.name : 'Card';
     if (e.method === 'ic') return n;
@@ -143,11 +151,12 @@
   // ===================== storage =====================
   var KEY = 'travel-wallet-v1';
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
-  var DB0 = { v: 1, stage: 'welcome', trips: [], activeId: null, stash: {}, remind: { on: false, mins: 1260 }, pushOn: false, deviceId: null, appearance: 'auto' };
+  var DB0 = { v: 1, stage: 'welcome', trips: [], activeId: null, stash: {}, remind: { on: false, mins: 1260 }, pushOn: false, deviceId: null, appearance: 'auto', cardBaht: 0 };
   function migrate(d) {
     (d.trips || []).forEach(function (t) { t.cards = t.cards || []; t.bookings = t.bookings || []; if (t.card == null) t.card = 0; });
     Object.keys(d.stash || {}).forEach(function (k) { d.stash[k].cards = d.stash[k].cards || []; });
     if (!d.appearance) d.appearance = 'auto';
+    if (d.cardBaht == null) d.cardBaht = 0;
     return d;
   }
   function load() { try { var raw = localStorage.getItem(KEY); if (raw) return migrate(Object.assign(clone(DB0), JSON.parse(raw))); } catch (e) { } return clone(DB0); }
@@ -178,7 +187,7 @@
   function untilText(t) { var d = daysBetween(today(), t.start); return d <= 0 ? '' : (d === 1 ? 'Starts tomorrow' : 'Starts in ' + d + ' days'); }
 
   // ===================== UI state =====================
-  var DRAFT0 = { method: 'cash', cardId: null, digits: '', cat: 'Food', name: '', given: {}, got: null, err: '', editId: null, back: 'home' };
+  var DRAFT0 = { method: 'cash', cardId: null, baht: '', bahtTouched: false, digits: '', cat: 'Food', name: '', given: {}, got: null, err: '', editId: null, back: 'home' };
   var NT0 = { step: 'country', cur: null, name: '', start: null, days: 3, useStash: true, counts: {}, card: '', err: '' };
   var AC0 = { src: 'Exchange', counts: {}, err: '', back: 'home', editId: null };
   var SA0 = { step: 'country', cur: null, counts: {}, err: '', back: 'stash', fromOb: false, editing: false };
@@ -192,7 +201,7 @@
     draft: clone(DRAFT0), nt: clone(NT0), ac: clone(AC0), sa: clone(SA0), ct: clone(CT0), rc: clone(RC0), te: null,
     ca: clone(CA0), it: clone(IT0), bk: clone(BK0), pastId: null,
     open: null, confirmDel: null, stashOpen: null, stashDel: null, confirmEnd: false,
-    coinSheet: null, csMode: 'menu', csQty: 1, cardSheet: null, tripMenu: null, delTrip: null, delMode: 'keep', cal: null,
+    coinSheet: null, csMode: 'menu', csQty: 1, cardSheet: null, tripMenu: null, delTrip: null, delMode: 'keep', cal: null, cf: null,
     settings: false, confirmReset: false, toast: '', pushMsg: '', pushBusy: false
   };
   function set(o) { Object.assign(S, o); render(); }
@@ -224,7 +233,7 @@
   root.addEventListener('change', function (e) { var el = e.target.closest('[data-file]'); if (el && el.files && el.files[0]) restoreBackup(el.files[0]); });
 
   // ===================== icons & small parts =====================
-  var APP_VERSION = '1.3.0', APP_UPDATED = '2 Nov 2026';
+  var APP_VERSION = '1.4.0', APP_UPDATED = '19 Nov 2026';
   function LOGO(size) {
     return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 96 96" role="img" aria-label="Travel Wallet logo"><rect width="96" height="96" rx="22" fill="#1F6B52"/>' +
       '<circle cx="48" cy="48" r="28" fill="#E6CB76" stroke="#B8963A" stroke-width="4"/><circle cx="48" cy="48" r="21" fill="none" stroke="#B8963A" stroke-width="1.6" stroke-dasharray="2 3"/>' +
@@ -274,6 +283,7 @@
     if (S.view === 'tripedit') { var E = S.te && tripById(S.te.tripId); if (E) return tripEdit(E); S.view = 'trips'; return trips(T); }
     if (!T) { S.view = 'trips'; return trips(null); }
     if (S.view === 'cardadd') return cardAdd(T);
+    if (S.view === 'cardfix' && S.cf) return cardFix(T);
     if (S.view === 'ictop') return icTop(T);
     if (S.view === 'booking') return bookingScreen(T);
     if (S.view === 'addcash') return countScreen('addcash');
@@ -555,23 +565,28 @@
     return list.map(function (e) {
       var cat = catOf(e.cat), cash = e.method === 'cash', k = e.cardId ? cardOf(T, e.cardId) : null, kName = k ? k.name : 'the card';
       var net = e.method === 'adjust' ? total(e.got, C) - total(e.given, C) : 0;
-      var plus = e.method === 'topup' || e.method === 'cardin' || e.method === 'icin' || (e.method === 'icfix' && e.amount > 0) || (e.method === 'adjust' && net > 0);
-      var initial = plus ? '+' : (e.method === 'lost' ? '!' : ((e.method === 'adjust' || e.method === 'icfix') ? '=' : e.cat.charAt(0)));
+      var plus = e.method === 'topup' || e.method === 'cardin' || e.method === 'bahtin' || e.method === 'icin' || (e.method === 'icfix' && e.amount > 0) || (e.method === 'adjust' && net > 0);
+      var initial = plus ? '+' : (e.method === 'lost' ? '!' : ((e.method === 'adjust' || e.method === 'icfix' || e.method === 'cardfix') ? '=' : e.cat.charAt(0)));
       var detail;
       if (cash) detail = 'Gave ' + describe(e.given, C) + '. Got back ' + (total(e.got, C) ? describe(e.got, C) : 'nothing') + '.';
       else if (e.method === 'topup') detail = 'Received ' + describe(e.got, C) + '.';
-      else if (e.method === 'cardin') detail = 'Added to your travel card.';
+      else if (e.method === 'cardin') detail = 'Added ' + money(e.amount, C) + ' to the ' + pocketName(C).toLowerCase() + ' pocket on your travel card.';
+      else if (e.method === 'bahtin') detail = 'Added ' + baht2(e.amount) + ' to the baht pocket on your travel card. Not counted as spending.';
+      else if (e.method === 'cardfix') detail = 'Travel card balance fix.' + (e.amount ? ' ' + pocketName(C) + ' ' + (e.amount > 0 ? '+' : '-') + money(Math.abs(e.amount), C) + '.' : '') + (e.bahtDiff ? ' Baht ' + (e.bahtDiff > 0 ? '+' : '-') + baht2(Math.abs(e.bahtDiff)) + '.' : '') + ' Not counted as spending.';
+      else if (e.method === 'card' && e.baht) detail = 'Paid by travel card: ' + money(e.fromWon || 0, C) + ' from ' + pocketName(C).toLowerCase() + ' and ' + money(e.amount - (e.fromWon || 0), C) + ' from baht (' + baht2(e.baht) + ' taken).';
       else if (e.method === 'icin') detail = (e.via === 'credit' ? 'Topped up ' + kName + ' with a credit card. No cash moved.' : 'Put ' + describe(e.given, C) + ' into ' + kName + '.') + ' Not counted as spending.';
       else if (e.method === 'icfix') detail = 'Balance fix on ' + kName + '. Not counted as spending.';
       else if (e.method === 'ic') detail = 'Paid with ' + kName + '. No cash moved.';
       else if (e.method === 'lost') detail = 'Missing: ' + describe(e.given, C) + (total(e.got, C) ? ' (and found ' + describe(e.got, C) + ')' : '') + '. Not counted as spending. Delete it if this was a mistake.';
       else if (e.method === 'adjust') detail = 'Recount fix. ' + (total(e.given, C) ? 'Removed ' + describe(e.given, C) + '. ' : '') + (total(e.got, C) ? 'Added ' + describe(e.got, C) + '. ' : '') + 'Delete it and recount if this was a mistake.';
       else detail = 'Paid by ' + METHOD_TEXT[e.method].toLowerCase() + '. No cash moved.';
-      var bg = plus ? '#CDEBDD' : (e.method === 'lost' ? '#F8DEDC' : ((e.method === 'adjust' || e.method === 'icfix') ? '#E5DED3' : cat.bg));
-      var fg = plus ? '#134733' : (e.method === 'lost' ? '#7A1F1B' : ((e.method === 'adjust' || e.method === 'icfix') ? '#4A4038' : cat.fg));
+      var bg = plus ? '#CDEBDD' : (e.method === 'lost' ? '#F8DEDC' : ((e.method === 'adjust' || e.method === 'icfix' || e.method === 'cardfix') ? '#E5DED3' : cat.bg));
+      var fg = plus ? '#134733' : (e.method === 'lost' ? '#7A1F1B' : ((e.method === 'adjust' || e.method === 'icfix' || e.method === 'cardfix') ? '#4A4038' : cat.fg));
       var amt = e.method === 'adjust' ? Math.abs(net) : Math.abs(e.amount);
       var amountText = (e.method === 'adjust' && net === 0) ? money(0, C) : (plus ? '+' : '-') + money(amt, C);
-      var open = S.open === e.id, conf = S.confirmDel === e.id, canEdit = !readOnly && e.method !== 'adjust' && e.method !== 'lost' && e.method !== 'icfix';
+      if (e.method === 'bahtin') amountText = '+' + baht2(e.amount);
+      if (e.method === 'cardfix') amountText = [e.amount ? (e.amount > 0 ? '+' : '-') + money(Math.abs(e.amount), C) : '', e.bahtDiff ? (e.bahtDiff > 0 ? '+' : '-') + baht2(Math.abs(e.bahtDiff)) : ''].filter(Boolean).join(' ');
+      var open = S.open === e.id, conf = S.confirmDel === e.id, canEdit = !readOnly && e.method !== 'adjust' && e.method !== 'lost' && e.method !== 'icfix' && e.method !== 'cardfix';
       var more = '';
       if (open) {
         more = '<div class="entry-more"><span class="small" style="color:#4A4038;line-height:1.5">' + esc(detail) + '</span>' + (readOnly ? '' : (conf ?
@@ -588,9 +603,10 @@
   }
   function openEdit(T, e) {
     var C = CURS[T.cur];
-    if (e.method === 'cash' || e.method === 'card' || e.method === 'credit' || e.method === 'ic') set({ view: 'pay', draft: Object.assign(clone(DRAFT0), { method: e.method, cardId: e.cardId || null, digits: String(e.amount), cat: e.cat, name: e.name === e.cat ? '' : e.name, given: clone(e.given), got: e.method === 'cash' ? clone(e.got) : null, editId: e.id, back: S.view }), open: null, cardSheet: null });
+    if (e.method === 'cash' || e.method === 'card' || e.method === 'credit' || e.method === 'ic') set({ view: 'pay', draft: Object.assign(clone(DRAFT0), { method: e.method, cardId: e.cardId || null, digits: String(e.amount), cat: e.cat, name: e.name === e.cat ? '' : e.name, given: clone(e.given), got: e.method === 'cash' ? clone(e.got) : null, baht: e.baht ? String(e.baht / 100) : '', bahtTouched: !!e.baht, editId: e.id, back: S.view }), open: null, cardSheet: null });
     else if (e.method === 'topup') { var src = 'Other'; Object.keys(SRC_NAME).forEach(function (k) { if (SRC_NAME[k] === e.name) src = k; }); set({ view: 'addcash', ac: Object.assign(clone(AC0), { src: src, counts: clone(e.got), editId: e.id, back: S.view }), open: null }); }
-    else if (e.method === 'cardin') set({ view: 'cardtop', ct: Object.assign(clone(CT0), { amount: String(e.amount / C.minor), editId: e.id }), open: null, cardSheet: null });
+    else if (e.method === 'cardin') set({ view: 'cardtop', ct: Object.assign(clone(CT0), { pocket: 'local', amount: String(e.amount / C.minor), editId: e.id }), open: null, cardSheet: null });
+    else if (e.method === 'bahtin') set({ view: 'cardtop', ct: Object.assign(clone(CT0), { pocket: 'thb', amount: String(e.amount / 100), editId: e.id }), open: null, cardSheet: null });
     else if (e.method === 'icin') set({ view: 'ictop', it: Object.assign(clone(IT0), { cardId: e.cardId, via: e.via || 'cash', counts: clone(e.given || {}), amount: String(e.amount / C.minor), editId: e.id, back: S.view }), open: null, cardSheet: null });
   }
 
@@ -617,7 +633,7 @@
       '<span aria-label="Currency ' + C.code + '" style="width:40px;height:40px;background:' + C.badgeBg + ';color:' + C.badgeFg + ';border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;flex:none"><span class="flag" style="font-size:16px">' + C.flag + '</span><span style="font-size:10px;font-weight:700;line-height:1">' + C.code + '</span></span></div></div>' +
       viewingBanner(T) + countdownCard(T) +
       '<div class="dark col gap12" style="border-radius:26px;padding:20px"><span style="font-size:14px;color:#C9B8A5;font-weight:500">Cash in your wallet</span><span style="font-size:40px;font-weight:700;line-height:1;letter-spacing:-0.5px">' + money(cashSum, C) + '</span>' +
-      '<div class="wrap" style="gap:8px"><button class="card-pill" style="background:#57473E;color:#F4EAD9"' + A(function () { set({ cardSheet: 'travel' }); }) + '>Travel card ' + money(T.card, C) + '</button>' +
+      '<div class="wrap" style="gap:8px"><button class="card-pill" style="background:#57473E;color:#F4EAD9"' + A(function () { set({ cardSheet: 'travel' }); }) + '>Travel card ' + cardText(T, C) + '</button>' +
         T.cards.map(function (k) { return '<button class="card-pill" style="background:' + k.color + ';color:' + onColor(k.color) + '"' + A(function () { set({ cardSheet: k.id }); }) + '>' + esc(k.name) + ' ' + money(k.bal, C) + '</button>'; }).join('') +
         (C.coins.length ? '<span class="card-pill" style="background:#E6CB76;color:#4A3806">' + cc + (cc === 1 ? ' coin · ' : ' coins · ') + money(coinValue(w, C), C) + '</span>' : '') +
         '<button class="card-pill card-add" aria-label="Add a transit card"' + A(function () { openCardAdd(); }) + '>+ Card</button></div></div>' +
@@ -652,21 +668,21 @@
 
   function payMethods(T, d, base, setDraft) {
     var C = CURS[T.cur];
-    if (!base.k.length) return '<div class="seg">' + [['cash', 'Cash'], ['card', 'Travel card'], ['credit', 'Credit card']].map(function (m) { return '<button class="' + (d.method === m[0] ? 'on' : '') + '"' + A(function () { setDraft({ method: m[0], cardId: null, got: null }); }) + '>' + m[1] + '</button>'; }).join('') + '</div>';
+    if (!base.k.length) return '<div class="seg">' + [['cash', 'Cash'], ['card', 'Travel card'], ['credit', 'Credit card']].map(function (m) { return '<button class="' + (d.method === m[0] ? 'on' : '') + '"' + A(function () { setDraft({ method: m[0], cardId: null, got: null, bahtTouched: false, baht: '' }); }) + '>' + m[1] + '</button>'; }).join('') + '</div>';
     var opts = [{ m: 'cash', label: 'Cash' }, { m: 'card', label: 'Travel card' }];
     base.k.forEach(function (k) { opts.push({ m: 'ic', id: k.id, label: k.name + ' · ' + money(k.bal, C), color: k.color }); });
     opts.push({ m: 'credit', label: 'Credit card' });
     return '<div class="grid2" style="gap:6px">' + opts.map(function (o) {
       var on = d.method === o.m && (o.m !== 'ic' || d.cardId === o.id);
       var style = o.color ? (on ? 'background:' + o.color + ';border-color:' + o.color + ';color:' + onColor(o.color) : 'border-color:' + o.color) : '';
-      return '<button class="method-btn' + (on && !o.color ? ' on' : '') + '" style="' + style + '"' + A(function () { setDraft({ method: o.m, cardId: o.id || null, got: null }); }) + '>' + (o.color && !on ? '<span style="width:10px;height:10px;border-radius:3px;background:' + o.color + ';flex:none"></span>' : '') + '<span class="ellipsis">' + esc(o.label) + '</span></button>';
+      return '<button class="method-btn' + (on && !o.color ? ' on' : '') + '" style="' + style + '"' + A(function () { setDraft({ method: o.m, cardId: o.id || null, got: null, bahtTouched: false, baht: '' }); }) + '>' + (o.color && !on ? '<span style="width:10px;height:10px;border-radius:3px;background:' + o.color + ';flex:none"></span>' : '') + '<span class="ellipsis">' + esc(o.label) + '</span></button>';
     }).join('') + '</div>';
   }
   function pay(T) {
     var C = CURS[T.cur], d = S.draft, editE = null;
     if (d.editId) T.expenses.forEach(function (e) { if (e.id === d.editId) editE = e; });
-    var base = editE ? applyAll(T, editE, null, C) : { w: T.wallet, c: T.card, k: T.cards };
-    if (!base) base = { w: T.wallet, c: T.card, k: T.cards };
+    var base = editE ? applyAll(T, editE, null, C) : { w: T.wallet, c: T.card, k: T.cards, b: db.cardBaht || 0 };
+    if (!base) base = { w: T.wallet, c: T.card, k: T.cards, b: db.cardBaht || 0 };
     var bw = base.w, icCard = null;
     if (d.method === 'ic') base.k.forEach(function (k) { if (k.id === d.cardId) icCard = k; });
     if (d.method === 'ic' && !icCard) { d.method = 'cash'; }
@@ -674,14 +690,20 @@
     var due = isCash && C.round > 1 ? Math.round(price / C.round) * C.round : price;
     var givenSum = total(d.given, C), changeDue = isCash ? Math.max(0, givenSum - due) : 0;
     var got = d.got || greedy(changeDue, C), gotSum = total(got, C);
+    // Travel card: local pocket first, then the baht pocket covers the rest.
+    var isTc = d.method === 'card', fromWon = isTc ? Math.min(price, Math.max(0, base.c)) : 0, rest = isTc ? price - fromWon : 0;
+    var bahtEst = Math.round(rest / C.minor * T.rate * 100);
+    function bahtNow() { return S.draft.bahtTouched ? parseBaht(S.draft.baht) : bahtEst; }
     function setDraft(o) { set({ draft: Object.assign({}, S.draft, { err: '' }, o) }); }
     function saveIt() {
       if (!price) { setDraft({ err: 'Enter an amount first.' }); return; }
       if (isCash && givenSum < due) { setDraft({ err: 'Tap the notes or coins you handed over. You need at least ' + money(due, C) + '.' }); return; }
-      if (d.method === 'card' && price > base.c) { setDraft({ err: 'Your travel card only has ' + money(base.c, C) + '. Top it up or pay another way.' }); return; }
+      if (isTc && rest && !bahtNow()) { setDraft({ err: 'Enter the baht the card took.' }); return; }
+      if (isTc && rest && bahtNow() > base.b) { setDraft({ err: 'Your travel card only has ' + money(base.c, C) + ' and ' + baht2(base.b) + '. Top it up or pay another way.' }); return; }
       if (icCard && price > icCard.bal) { setDraft({ err: icCard.name + ' only has ' + money(icCard.bal, C) + '. Top it up or pay another way.' }); return; }
       var e = { id: editE ? editE.id : Date.now(), ts: editE ? editE.ts : Date.now(), name: String(S.draft.name || '').trim() || d.cat, cat: d.cat, method: d.method, amount: due, given: isCash ? d.given : {}, got: isCash ? got : {} };
       if (icCard) e.cardId = icCard.id;
+      if (isTc) { e.fromWon = fromWon; e.baht = rest ? bahtNow() : 0; }
       if (!commitE(T, editE, e)) { setDraft({ err: "That doesn't fit what's in your wallet. Check the notes and coins." }); return; }
       set({ view: d.back || 'home', draft: clone(DRAFT0), open: null });
       toast(editE ? 'Updated. Your wallet is fixed' : (isCash ? 'Saved. Your wallet is updated' : 'Saved'));
@@ -692,7 +714,12 @@
       (isCash && C.round > 1 && price % C.round !== 0 ? '<span class="small bold" style="text-align:center;color:#5E4306">Cash total rounds to ' + money(due, C) + '</span>' : '') +
       '<div class="keypad">' + ['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0', '⌫'].map(function (k) { return '<button aria-label="' + (k === '⌫' ? 'Delete' : k) + '"' + A(function () { var s = S.draft.digits; if (k === '⌫') s = s.slice(0, -1); else if (s.length < 10) s = (s + k).replace(/^0+/, ''); setDraft({ digits: s, got: null }); }) + '>' + k + '</button>'; }).join('') + '</div></div>' +
       (icCard && price ? '<div class="note-box ' + (price > icCard.bal ? 'note-bad' : 'note-ok') + ' small bold row" style="gap:8px"><span style="width:12px;height:12px;border-radius:3px;background:' + icCard.color + ';flex:none"></span>' + esc(icCard.name) + ' ' + money(icCard.bal, C) + ' → ' + money(icCard.bal - price, C) + '</div>' : '') +
-      (d.method === 'card' && price ? '<div class="note-box ' + (price > base.c ? 'note-bad' : 'note-ok') + ' small bold">Travel card ' + money(base.c, C) + ' → ' + money(base.c - price, C) + '</div>' : '') +
+      (isTc && price ? (!rest ? '<div class="note-box note-ok small bold">Travel card ' + pocketName(C) + ' ' + money(base.c, C) + ' → ' + money(base.c - price, C) + '</div>' :
+        '<div class="card col gap8" style="border-radius:18px"><span class="bold">How the card pays</span>' +
+        '<div class="between small"><span class="muted">From ' + pocketName(C).toLowerCase() + '</span><span class="bold">' + money(fromWon, C) + (fromWon ? ' (all of it)' : '') + '</span></div>' +
+        '<div class="between small"><span class="muted">From baht</span><span class="bolder">' + money(rest, C) + '</span></div></div>' +
+        '<label class="field">Baht taken (from your card app)<span class="row" style="position:relative"><input inputmode="decimal" style="width:100%;padding-right:120px" value="' + esc(d.bahtTouched ? d.baht : (bahtEst / 100).toFixed(2)) + '"' + inp('payBaht', function (v) { S.draft.baht = v; S.draft.bahtTouched = true; }) + '><span class="small muted" style="position:absolute;right:14px;pointer-events:none">≈ ' + baht2(bahtEst) + ' estimate</span></span></label>' +
+        '<div class="note-box ' + (bahtNow() > base.b ? 'note-bad' : 'note-ok') + ' small bold">Baht pocket ' + baht2(base.b) + ' → ' + baht2(base.b - bahtNow()) + '</div>') : '') +
       '<div class="col gap10"><span class="bold">What was it?</span><div class="wrap">' + CATS.map(function (c) { var on = d.cat === c.id; return '<button class="pill" style="border-color:' + (on ? c.fg : '#DDD0BF') + ';background:' + (on ? c.bg : '#FFFDF9') + ';color:' + (on ? c.fg : '#4A4038') + '"' + A(function () { setDraft({ cat: c.id }); }) + '>' + c.id + '</button>'; }).join('') + '</div>' +
       '<label class="field" style="font-size:13px">Name (optional)<input placeholder="Ramen" value="' + esc(d.name) + '"' + inp('payName', function (v) { S.draft.name = v; }) + '></label></div>';
     if (isCash) {
@@ -764,20 +791,48 @@
   function cardTop(T) {
     var C = CURS[T.cur], ct = S.ct, old = null;
     if (ct.editId) T.expenses.forEach(function (x) { if (x.id === ct.editId) old = x; });
-    return '<div class="scroll"><div class="row gap12">' + backBtn(function () { set({ view: old ? 'history' : 'home', ct: clone(CT0) }); }) + '<span class="kicker ellipsis">' + esc(T.name) + '</span></div>' +
-      '<div class="col gap6"><h1>' + (old ? 'Edit card top-up' : 'Top up travel card') + '</h1><p class="muted" style="font-size:14px;line-height:1.5">Loaded more money onto your travel card? Add the amount so the balance stays right. Now ' + money(T.card, C) + '.</p></div>' +
-      '<label class="field">Amount in ' + C.code + '<input inputmode="decimal" placeholder="0" style="font-size:22px" value="' + esc(ct.amount) + '"' + inp('ctAmt', function (v) { S.ct.amount = v; }) + '></label>' +
+    var pocket = ct.pocket || (old && old.method === 'cardin' ? 'local' : 'thb'), isThb = pocket === 'thb', pn = pocketName(C);
+    function setCt(o) { set({ ct: Object.assign({}, S.ct, { err: '' }, o) }); }
+    var back = function () { set({ view: old ? 'history' : 'home', ct: clone(CT0) }); };
+    var amt = isThb ? parseBaht(ct.amount) : parseAmount(ct.amount, C);
+    return '<div class="scroll"><div class="row gap12">' + backBtn(back) + '<span class="kicker ellipsis">' + esc(T.name) + '</span></div>' +
+      '<div class="col gap6"><h1>' + (old ? 'Edit card top-up' : 'Top up travel card') + '</h1><p class="muted" style="font-size:14px;line-height:1.5">Now ' + money(T.card, C) + ' + ' + baht2(db.cardBaht || 0) + ' on the card.</p></div>' +
+      (old ? '' : '<div class="seg">' + [['thb', '฿ Baht'], ['local', (C.pre || C.post).trim() + ' ' + pn]].map(function (m) { return '<button class="' + (pocket === m[0] ? 'on' : '') + '"' + A(function () { setCt({ pocket: m[0] }); }) + '>' + esc(m[1]) + '</button>'; }).join('') + '</div>') +
+      '<label class="field">Amount in ' + (isThb ? 'baht' : C.code) + '<input inputmode="decimal" placeholder="0" style="font-size:22px" value="' + esc(ct.amount) + '"' + inp('ctAmt', function (v) {
+        S.ct.amount = v; if (old) return;
+        var el = root.querySelector(isThb ? '#ctB' : '#ctL'), a3 = isThb ? parseBaht(v) : parseAmount(v, C);
+        if (el) el.textContent = isThb ? baht2(db.cardBaht || 0) + ' → ' + baht2((db.cardBaht || 0) + a3) : money(T.card, C) + ' → ' + money(T.card + a3, C);
+      }) + '></label>' +
+      '<div class="card col gap8" style="border-radius:18px">' +
+      '<div class="between small"><span class="muted">Baht pocket</span><span class="bold" id="ctB">' + (isThb ? baht2(db.cardBaht || 0) + ' → ' + baht2((db.cardBaht || 0) + (old ? 0 : amt)) : baht2(db.cardBaht || 0) + ' (no change)') + '</span></div>' +
+      '<div class="between small"><span class="muted">' + pn + ' pocket</span><span class="bold" id="ctL">' + (isThb ? money(T.card, C) + ' (no change)' : money(T.card, C) + ' → ' + money(T.card + (old ? 0 : amt), C)) + '</span></div></div>' +
+      '<div class="note-box note-ok small">Moving money onto the card isn\'t spending. It\'s counted when you pay. ' + pn + ' is used first, then baht.</div>' +
       errBox(ct.err) +
       '<button class="btn btn-primary"' + A(function () {
-        var amt = parseAmount(S.ct.amount, C);
-        if (!amt) { set({ ct: Object.assign({}, S.ct, { err: 'Enter the amount you loaded.' }) }); return; }
-        var b = old ? applyE(T.wallet, T.card, old, -1, C) : { w: T.wallet, c: T.card };
-        var e = { id: old ? old.id : Date.now(), ts: old ? old.ts : Date.now(), name: 'Card top-up', cat: 'Other', method: 'cardin', amount: amt, given: {}, got: {} };
-        var r = applyE(b.w, b.c, e, 1, C);
-        if (!okW(r.w, r.c, C)) { set({ ct: Object.assign({}, S.ct, { err: 'Some of that card money is already spent.' }) }); return; }
-        T.card = r.c; T.expenses = old ? T.expenses.map(function (x) { return x.id === old.id ? e : x; }) : [e].concat(T.expenses);
-        save(); set({ view: old ? 'history' : 'home', ct: clone(CT0), open: null }); toast(old ? 'Updated' : money(amt, C) + ' added to your travel card');
+        var a2 = isThb ? parseBaht(S.ct.amount) : parseAmount(S.ct.amount, C);
+        if (!a2) { setCt({ err: 'Enter the amount you loaded.' }); return; }
+        var e = { id: old ? old.id : Date.now(), ts: old ? old.ts : Date.now(), name: 'Card top-up', cat: 'Other', method: isThb ? 'bahtin' : 'cardin', amount: a2, given: {}, got: {} };
+        if (!commitE(T, old, e)) { setCt({ err: 'Some of that card money is already spent.' }); return; }
+        set({ view: old ? 'history' : 'home', ct: clone(CT0), open: null }); toast(old ? 'Updated' : (isThb ? baht2(a2) : money(a2, C)) + ' added to your travel card');
       }) + '>' + (old ? 'Save changes' : 'Add to travel card') + '</button></div>';
+  }
+  function cardFix(T) {
+    var C = CURS[T.cur], cf = S.cf, pn = pocketName(C);
+    function setCf(o) { set({ cf: Object.assign({}, S.cf, { err: '' }, o) }); }
+    var back = function () { set({ view: 'home', cf: null }); };
+    return '<div class="scroll"><div class="row gap12">' + backBtn(back) + '<span class="kicker ellipsis">' + esc(T.name) + '</span></div>' +
+      '<div class="col gap6"><h1>Fix card balance</h1><p class="muted" style="font-size:14px;line-height:1.5">Type what your card app shows now. The difference is saved as a balance fix. It isn\'t counted as spending.</p></div>' +
+      '<label class="field">' + pn + ' on the card (' + C.code + ')<input inputmode="decimal" placeholder="0" style="font-size:22px" value="' + esc(cf.won) + '"' + inp('cfWon', function (v) { S.cf.won = v; }) + '></label>' +
+      '<label class="field">Baht on the card<input inputmode="decimal" placeholder="0" style="font-size:22px" value="' + esc(cf.baht) + '"' + inp('cfBaht', function (v) { S.cf.baht = v; }) + '></label>' +
+      '<span class="xs muted">The baht pocket is shared by all your trips.</span>' +
+      errBox(cf.err) +
+      '<button class="btn btn-primary"' + A(function () {
+        var w = String(S.cf.won).trim() === '' ? T.card : (parseAmount(S.cf.won, C) || 0), bt = String(S.cf.baht).trim() === '' ? (db.cardBaht || 0) : (parseBaht(S.cf.baht) || 0);
+        var dw = w - T.card, dbt = bt - (db.cardBaht || 0);
+        if (!dw && !dbt) { set({ view: 'home', cf: null }); toast('No change'); return; }
+        commitE(T, null, { id: Date.now(), ts: Date.now(), name: 'Balance fix', cat: 'Other', method: 'cardfix', amount: dw, bahtDiff: dbt, given: {}, got: {} });
+        set({ view: 'home', cf: null }); toast('Card balance fixed');
+      }) + '>Save balance</button></div>';
   }
 
   function historyScreen(T) {
@@ -820,7 +875,8 @@
     });
     var maxC = 1; Object.keys(byC).forEach(function (k) { if (byC[k] > maxC) maxC = byC[k]; });
     var before = 0; T.bookings.forEach(function (b) { before += bookingBaht(b, T); });
-    var during = tot / C.minor * T.rate;
+    var during = 0;
+    T.expenses.forEach(function (e) { if (!isSpend(e.method)) return; if (e.method === 'card' && e.baht) during += (e.fromWon || 0) / C.minor * T.rate + e.baht / 100; else during += e.amount / C.minor * T.rate; });
     var rateText = '฿' + (T.rate < 0.01 ? T.rate.toFixed(4) : T.rate) + ' per ' + C.unit;
     var tiles = [['Cash', byM.cash, null], ['Travel card', byM.card, null]];
     T.cards.forEach(function (k) { tiles.push([k.name, byK[k.id] || 0, k.color]); });
@@ -846,7 +902,7 @@
     var C = CURS[T.cur], w = T.wallet, cc = coinsOf(w, C), cash = money(total(w, C), C);
     return '<div class="scroll with-nav"><div class="col"><span class="small muted">' + C.country + ' · ' + tripDates(T) + '</span><span style="font-size:28px;font-weight:700">Trip summary</span></div>' +
       summaryBody(T, false) +
-      '<div class="card col gap10"><div class="between"><span class="bold">What\'s left</span><span class="bolder">' + cash + '</span></div><div class="wrap">' + chipsHtml(w, C) + '</div><span class="small muted">Plus ' + money(T.card, C) + ' on the travel card' + T.cards.map(function (k) { return ', ' + money(k.bal, C) + ' on ' + esc(k.name); }).join('') + '</span></div>' +
+      '<div class="card col gap10"><div class="between"><span class="bold">What\'s left</span><span class="bolder">' + cash + '</span></div><div class="wrap">' + chipsHtml(w, C) + '</div><span class="small muted">Plus ' + money(T.card, C) + (db.cardBaht ? ' and ' + baht2(db.cardBaht) : '') + ' on the travel card' + T.cards.map(function (k) { return ', ' + money(k.bal, C) + ' on ' + esc(k.name); }).join('') + '</span></div>' +
       (S.confirmEnd ? '<div class="card col gap12" style="border:2px solid #1F6B52"><span class="bold">End this trip?</span><span class="muted" style="font-size:14px;line-height:1.5">' + esc(moneyLeftText(T)) + ' move to your stash. They\'ll load into your next trip to ' + C.country + '.</span><div class="row gap8"><button class="btn btn-soft grow" style="min-height:48px;font-size:15px"' + A(function () { set({ confirmEnd: false }); }) + '>Not yet</button><button class="btn btn-primary grow" style="min-height:48px;font-size:15px;padding:12px"' + A(function () {
         stashLeftovers(T); T.ended = true; if (viewId === T.id) viewId = null; save(); set({ view: 'trips', confirmEnd: false }); toast('Trip ended. Leftovers saved to your ' + C.country + ' stash');
       }) + '>End and save</button></div></div>' : '<button class="btn btn-primary"' + A(function () { set({ confirmEnd: true }); }) + '>End trip</button>') + '</div>';
@@ -1047,9 +1103,12 @@
   function cardSheet(T) {
     var C = CURS[T.cur], close = function () { set({ cardSheet: null, open: null, confirmDel: null }); };
     if (S.cardSheet === 'travel') {
-      var tl = T.expenses.filter(function (e) { return e.method === 'card' || e.method === 'cardin'; });
-      return sheetWrap('Travel card', close, cardFace('Travel card', '#57473E', money(T.card, C), 'Prepaid') +
-        '<button class="btn btn-primary" style="min-height:50px;padding:13px"' + A(function () { set({ view: 'cardtop', ct: clone(CT0), cardSheet: null }); }) + '>Top up</button>' +
+      var tl = T.expenses.filter(function (e) { return e.method === 'card' || e.method === 'cardin' || e.method === 'bahtin' || e.method === 'cardfix'; });
+      var pn = pocketName(C);
+      return sheetWrap('Travel card', close, '<div class="card-face" style="background:#57473E;color:#F4EAD9"><div class="between" style="align-items:center"><span style="font-size:22px;font-weight:700">Travel card</span><span style="font-size:12px;font-weight:600;background:rgba(255,255,255,.22);border-radius:6px;padding:3px 8px">Prepaid</span></div>' +
+        '<div class="grid2"><div class="col"><span style="font-size:13px;opacity:.85">' + pn + '</span><span style="font-size:26px;font-weight:700;line-height:1.15">' + money(T.card, C) + '</span><span style="font-size:12px;opacity:.75">used first</span></div>' +
+        '<div class="col"><span style="font-size:13px;opacity:.85">Baht</span><span style="font-size:26px;font-weight:700;line-height:1.15">' + baht2(db.cardBaht || 0) + '</span><span style="font-size:12px;opacity:.75">when ' + pn.toLowerCase() + ' runs out</span></div></div></div>' +
+        '<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px"><button class="btn btn-primary" style="min-height:50px;padding:13px"' + A(function () { set({ view: 'cardtop', ct: clone(CT0), cardSheet: null }); }) + '>Top up</button><button class="btn" style="min-height:50px;padding:13px;background:#F4EEE5;font-size:15px"' + A(function () { set({ view: 'cardfix', cf: { won: String(T.card / C.minor), baht: String((db.cardBaht || 0) / 100), err: '' }, cardSheet: null }); }) + '>Fix balance</button></div>' +
         '<span class="bold" style="font-size:15px;margin-top:4px">Travel card history</span>' + (tl.length ? '<div class="col gap8">' + entryRows(T, tl) + '</div>' : '<span class="small muted">Nothing on this card yet.</span>'));
     }
     var k = cardOf(T, S.cardSheet); if (!k) return '';
